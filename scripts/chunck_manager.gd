@@ -54,6 +54,12 @@ var last_collider_center: Vector3i = Vector3i(999999, 999999, 999999)
 
 func _ready() -> void:
 	terrain_algorithm.max_height = max_height
+
+	# 同步并补全 VoxelTypeRegistry 提供的全局色盘，确保全方块光栅化与光追色彩一致
+	var registry_palette = VoxelTypeRegistry.GetColorPalette()
+	for k in registry_palette.keys():
+		if not color_array.has(k):
+			color_array[k] = registry_palette[k]
 	meshing_algorithm.SetColors(color_array)
 	
 	find_player()

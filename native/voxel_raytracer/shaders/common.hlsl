@@ -50,13 +50,17 @@ inline float3 UnpackNormal(uint normalFlag) {
 // Procedural voxel color palette
 inline float3 GetVoxelColor(uint matID) {
     switch (matID) {
-        case 1: return float3(0.35, 0.65, 0.25); // Grass green
-        case 2: return float3(0.55, 0.40, 0.25); // Dirt brown
-        case 3: return float3(0.50, 0.50, 0.50); // Stone gray
-        case 4: return float3(0.85, 0.75, 0.45); // Sand yellow
-        case 5: return float3(0.95, 0.95, 0.98); // Snow white
-        case 6: return float3(0.20, 0.50, 0.20); // Leaves
-        case 7: return float3(0.25, 0.45, 0.85); // Water blue
+        case 1: return float3(0.35, 0.65, 0.25); // 1: Grass green
+        case 2: return float3(0.55, 0.40, 0.25); // 2: Dirt brown
+        case 3: return float3(0.50, 0.50, 0.50); // 3: Stone gray
+        case 4: return float3(0.85, 0.75, 0.45); // 4: Sand yellow
+        case 5: return float3(0.95, 0.95, 0.98); // 5: Snow white
+        case 6: return float3(0.40, 0.25, 0.15); // 6: Wood log bark brown
+        case 7: return float3(0.20, 0.50, 0.20); // 7: Leaves green
+        case 8: return float3(0.20, 0.45, 0.85); // 8: Water blue
+        case 9: return float3(0.42, 0.40, 0.40); // 9: Gravel dark gray
+        case 10: return float3(0.80, 0.90, 0.95); // 10: Glass light cyan
+        case 11: return float3(1.00, 0.85, 0.30); // 11: Glowstone warm gold
         default: return float3(0.80, 0.30, 0.70); // Custom / Debug magenta
     }
 }

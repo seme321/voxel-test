@@ -16,7 +16,23 @@ public partial class ChunkData : Resource
 	public const int BRICK_SHIFT = 3;
 	public const int BRICK_MASK = 7;
 
-	public enum Voxel : byte { SAND = 0, GRASS = 1, MOUNTAIN = 2, SNOW = 3, AIR = 4 };
+	public enum Voxel : byte
+	{
+		SAND = 0,
+		GRASS = 1,
+		MOUNTAIN = 2,
+		SNOW = 3,
+		AIR = 4,
+		DIRT = 5,
+		WOOD = 6,
+		LEAVES = 7,
+		WATER = 8,
+		GRAVEL = 9,
+		GLASS = 10,
+		GLOWSTONE = 11
+	};
+
+	public const Voxel STONE = Voxel.MOUNTAIN;
 
 	private int size = DEFAULT_SIZE;
 	private int bricksPerAxis = 16;   // 128 / 8 = 16
@@ -229,6 +245,9 @@ public partial class ChunkData : Resource
 		DirtySubChunksMask = 0UL;
 		DirtyNeighborMask = 0;
 	}
+
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	public void AddVoxel(int x, int y, int z, int voxel) => AddVoxel(x, y, z, (Voxel)voxel);
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
 	public void AddVoxel(int x, int y, int z, Voxel voxel)
@@ -619,9 +638,16 @@ public partial class ChunkData : Resource
 	public static ushort MapVoxelToRayTracingId(Voxel v) => v switch
 	{
 		Voxel.GRASS => 1,     // 1: 草地 (绿色)
+		Voxel.DIRT => 2,      // 2: 泥土 (棕褐)
+		Voxel.MOUNTAIN => 3,  // 3: 岩石/山体 (灰色)
 		Voxel.SAND => 4,      // 4: 沙地 (黄色)
-		Voxel.MOUNTAIN => 3,  // 3: 岩石/山脉 (灰色)
 		Voxel.SNOW => 5,      // 5: 白雪 (白色)
+		Voxel.WOOD => 6,      // 6: 原木 (木棕)
+		Voxel.LEAVES => 7,    // 7: 树叶 (墨绿)
+		Voxel.WATER => 8,     // 8: 水体 (清澈蓝)
+		Voxel.GRAVEL => 9,    // 9: 砾石 (暗斑灰)
+		Voxel.GLASS => 10,    // 10: 玻璃 (浅透青)
+		Voxel.GLOWSTONE => 11,// 11: 荧石 (暖金黄发光)
 		_ => 0                // 0: 空气 (跳过透明)
 	};
 

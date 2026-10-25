@@ -58,7 +58,9 @@ void RayGenMain()
         }
 
         // Physically plausible illumination: Ambient (0.26) + Direct Sun (0.74 * NdotL * shadow)
-        float lighting = 0.26 + 0.74 * NdotL * shadow;
+        // If block is emissive (payload.color.a > 1.5, e.g. Glowstone), unshaded radiant boost
+        float isEmissive = (payload.color.a > 1.5) ? 1.0 : 0.0;
+        float lighting = lerp(0.26 + 0.74 * NdotL * shadow, 1.4, isEmissive);
         float3 albedo = payload.color.rgb;
         float3 litColor = albedo * lighting;
 
