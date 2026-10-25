@@ -180,6 +180,15 @@ public partial class VoxelTypeRegistry : RefCounted
 	public static bool IsTransparent(ChunkData.Voxel type) => GetInfo(type).IsTransparent;
 	public static bool IsEmissive(ChunkData.Voxel type) => GetInfo(type).IsEmissive;
 
+	public static bool IsSolid(int index) => GetInfoByIndex(index).IsSolid;
+	public static bool HasGravity(int index) => GetInfoByIndex(index).HasGravity;
+	public static bool IsFluid(int index) => GetInfoByIndex(index).IsFluid;
+	public static bool IsFlammable(int index) => GetInfoByIndex(index).IsFlammable;
+	public static bool IsTransparent(int index) => GetInfoByIndex(index).IsTransparent;
+	public static bool IsEmissive(int index) => GetInfoByIndex(index).IsEmissive;
+	public static float GetHardness(int index) => GetInfoByIndex(index).Hardness;
+	public static float GetDensity(int index) => GetInfoByIndex(index).Density;
+
 	public static string GetVoxelName(int index) => GetInfoByIndex(index).Name;
 	public static string GetVoxelFlagsDescription(int index)
 	{

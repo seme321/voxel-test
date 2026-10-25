@@ -1,6 +1,7 @@
 [gd_scene format=3 uid="uid://dcu4bpt8c4dbb"]
 
 [ext_resource type="Script" uid="uid://d15474sgk2mhv" path="res://scripts/player.gd" id="1_4flbx"]
+[ext_resource type="PackedScene" path="res://scences/ui/hotbar.tscn" id="2_hotbar"]
 
 [sub_resource type="CapsuleShape3D" id="CapsuleShape3D_4flbx"]
 
@@ -21,3 +22,5 @@ transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.52005583, 0)
 
 [node name="EyeCamera" type="Camera3D" parent="Head" unique_id=803095228]
 current = true
+
+[node name="Hotbar" parent="." instance=ExtResource("2_hotbar")]

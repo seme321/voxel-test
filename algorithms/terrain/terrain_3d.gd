@@ -39,7 +39,7 @@ func generate_data(position: Vector3, biome_noise: Noise, chunk_data) -> void:
 			if biome_noise != null:
 				biome_n = ((biome_noise.get_noise_2d(gx, gz) + 0.5 * biome_noise.get_noise_2d(2.0 * gx, 2.0 * gz) + 0.25 * biome_noise.get_noise_2d(4.0 * gx, 4.0 * gz)) / 1.75 + 1.0) * 0.5
 			
-			var base_biome = Voxel.GRASS if biome_n > 0.55 else Voxel.SAND
+			var base_biome = VoxelTypes.Type.GRASS if biome_n > 0.55 else VoxelTypes.Type.SAND
 			var is_snow_candidate = biome_n > 0.5
 			
 			for y in range(chunk_size):
@@ -64,8 +64,8 @@ func generate_data(position: Vector3, biome_noise: Noise, chunk_data) -> void:
 				var height_factor: float = gy * inv_max_height
 				var biome = base_biome
 				if height_factor >= 0.22:
-					biome = Voxel.MOUNTAIN
+					biome = VoxelTypes.Type.STONE
 					if is_snow_candidate and height_factor > 0.4:
-						biome = Voxel.SNOW
+						biome = VoxelTypes.Type.SNOW
 				
 				chunk_data.AddVoxel(x, y, z, biome)
