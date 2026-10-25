@@ -12,7 +12,8 @@ func _ready() -> void:
 @onready var head: Node3D = $Head
 @onready var eye_camera: Camera3D = $Head/EyeCamera
 
-var flying: bool = true
+var flying: bool = false
+var floor_logged: bool = false
 
 
 func _physics_process(delta: float) -> void:
@@ -42,6 +43,10 @@ func _physics_process(delta: float) -> void:
 		velocity.z = move_toward(velocity.z, 0, speed)
 
 	move_and_slide()
+	
+	if is_on_floor() and not floor_logged:
+		floor_logged = true
+		print("[PHYSICS SUCCESS] Player landed on ground! Pos: ", global_position, " IsOnFloor: ", is_on_floor())
 	
 	
 func _unhandled_input(event: InputEvent) -> void:

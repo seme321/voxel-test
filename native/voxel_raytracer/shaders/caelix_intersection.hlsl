@@ -2,54 +2,15 @@
 
 #define BRICK_SIZE 8
 #define BRICK_DATA_BYTES 1096
-#define BRICK_MAX_STEPS 22
+#define BRICK_MAX_STEPS 28
 #define BRICK_EPSILON 0.0001f
-
-inline int3 VRTJump(int3 cell, float3 rayDir, uint mask) {
-    return lerp(cell | mask, cell & (~mask), rayDir < 0.0);
-}
 
 inline float3 SafeInvDir(float3 d) {
     return float3(
-        abs(d.x) > 1e-8 ? 1.0 / d.x : (d.x < 0 ? -1e8 : 1e8),
-        abs(d.y) > 1e-8 ? 1.0 / d.y : (d.y < 0 ? -1e8 : 1e8),
-        abs(d.z) > 1e-8 ? 1.0 / d.z : (d.z < 0 ? -1e8 : 1e8)
+        abs(d.x) > 1e-8 ? 1.0 / d.x : (d.x < 0.0 ? -1e8 : 1e8),
+        abs(d.y) > 1e-8 ? 1.0 / d.y : (d.y < 0.0 ? -1e8 : 1e8),
+        abs(d.z) > 1e-8 ? 1.0 / d.z : (d.z < 0.0 ? -1e8 : 1e8)
     );
-}
-
-inline float3 BoundaryOffset(float3 d) {
-    return float3(
-        d.x >= 0.0 ? 1.0 : 0.0,
-        d.y >= 0.0 ? 1.0 : 0.0,
-        d.z >= 0.0 ? 1.0 : 0.0
-    );
-}
-
-inline int3 VRTStep(int3 cell, float3 tStart, float3 origin, float3 rayDir, float3 invDir) {
-    float3 sideDist = tStart + float3(cell) * invDir;
-    float tmin = min(min(sideDist.x, sideDist.y), sideDist.z) + BRICK_EPSILON;
-    float3 currPos = origin + tmin * rayDir;
-    return int3(floor(currPos));
-}
-
-inline uint NormalFlags(uint stepIdx, int3 cell, float3 tStart, float3 rayDir, float3 invDir, uint entryFlags, out float hitOffsetT) {
-    if (stepIdx == 0u) {
-        hitOffsetT = 0.0;
-        return entryFlags;
-    }
-    float3 sideDist = tStart + float3(cell) * invDir;
-    hitOffsetT = min(min(sideDist.x, sideDist.y), sideDist.z);
-
-    bool3 axisMask = sideDist <= float3(hitOffsetT + BRICK_EPSILON, hitOffsetT + BRICK_EPSILON, hitOffsetT + BRICK_EPSILON);
-    uint xUse = axisMask.x ? 0xFFFFFFFFu : 0u;
-    uint yUse = (axisMask.y ? 0xFFFFFFFFu : 0u) & ~xUse;
-    uint zUse = ~(xUse | yUse);
-
-    uint xFlag = rayDir.x > 0.0 ? 0b000010 : 0b000001; // -X or +X
-    uint yFlag = rayDir.y > 0.0 ? 0b001000 : 0b000100; // -Y or +Y
-    uint zFlag = rayDir.z > 0.0 ? 0b100000 : 0b010000; // -Z or +Z
-
-    return (xFlag & xUse) | (yFlag & yUse) | (zFlag & zUse);
 }
 
 inline uint ReadVoxelID(uint brickBase, int3 localPos) {
@@ -72,7 +33,6 @@ void IntersectionMain()
     // Load Word 0 and Word 1
     uint2 brickInfo = g_Bricks.Load2(brickBase);
     uint idx = brickInfo.x & 0xFFFu;
-    uint coarseOccupancy = (brickInfo.x >> 16u) & 0xFFu;
     uint tightBounds = brickInfo.y;
 
     // Local Brick Origin inside the Sector (0..15 on each axis * 8)
@@ -116,19 +76,39 @@ void IntersectionMain()
 
     // Entry face normal
     uint entryNormalFlags = 0;
-    if (largestTmin == tmin.x) {
-        entryNormalFlags = rayDir.x > 0.0 ? 0b000010 : 0b000001;
-    } else if (largestTmin == tmin.y) {
-        entryNormalFlags = rayDir.y > 0.0 ? 0b001000 : 0b000100;
+    if (tmin.x >= tmin.y && tmin.x >= tmin.z) {
+        entryNormalFlags = rayDir.x > 0.0 ? 0b000010 : 0b000001; // -X or +X
+    } else if (tmin.y >= tmin.z) {
+        entryNormalFlags = rayDir.y > 0.0 ? 0b001000 : 0b000100; // -Y or +Y
     } else {
-        entryNormalFlags = rayDir.z > 0.0 ? 0b100000 : 0b010000;
+        entryNormalFlags = rayDir.z > 0.0 ? 0b100000 : 0b010000; // -Z or +Z
     }
 
-    // Micro-DDA inside the 8x8x8 Brick
-    float3 tStart = (BoundaryOffset(rayDir) - entryPos) * invDir;
-    float3 origin = clamp(entryPos, 0.0, 7.999);
-    int3 cell = int3(floor(origin));
-    int3 prevCell = cell;
+    // Amanatides-Woo 3D DDA traversal inside the 8x8x8 Brick
+    float3 pos = clamp(entryPos, 0.0, 7.9999);
+    int3 cell = int3(floor(pos));
+
+    int3 stepDir = int3(
+        rayDir.x > 0.0 ? 1 : (rayDir.x < 0.0 ? -1 : 0),
+        rayDir.y > 0.0 ? 1 : (rayDir.y < 0.0 ? -1 : 0),
+        rayDir.z > 0.0 ? 1 : (rayDir.z < 0.0 ? -1 : 0)
+    );
+
+    float3 nextBoundary = float3(
+        rayDir.x > 0.0 ? float(cell.x + 1) : float(cell.x),
+        rayDir.y > 0.0 ? float(cell.y + 1) : float(cell.y),
+        rayDir.z > 0.0 ? float(cell.z + 1) : float(cell.z)
+    );
+
+    float3 tMax = (nextBoundary - pos) * invDir;
+    if (rayDir.x == 0.0) tMax.x = 1e30;
+    if (rayDir.y == 0.0) tMax.y = 1e30;
+    if (rayDir.z == 0.0) tMax.z = 1e30;
+
+    float3 tDelta = abs(invDir);
+
+    float hitOffsetT = 0.0;
+    uint currentNormalFlag = entryNormalFlags;
 
     [loop]
     for (uint step = 0; step < BRICK_MAX_STEPS; ++step) {
@@ -136,43 +116,50 @@ void IntersectionMain()
             break;
         }
 
-        // 2x2x2 Coarse Jump
-        uint3 coarseCell = uint3(cell) >> 2u;
-        uint coarseBit = coarseCell.x | (coarseCell.y << 1u) | (coarseCell.z << 2u);
-        if ((coarseOccupancy & (1u << coarseBit)) == 0u) {
-            cell = VRTJump(cell, rayDir, 3u);
-            prevCell = cell;
-            cell = VRTStep(cell, tStart, origin, rayDir, invDir);
-            continue;
-        }
-
-        // Micro-Occupancy 64-bit mask test
-        uint occOffset = 8 + coarseBit * 8;
+        // Planar Z-slice bitmask test: Mask0..Mask7 (8 slices of 64-bit uint64)
+        uint occOffset = 8u + uint(cell.z) * 8u;
         uint2 occ64 = g_Bricks.Load2(brickBase + occOffset);
-        
-        int3 microCell = cell & 3;
-        uint microBit = uint(microCell.x | (microCell.y << 2u) | (microCell.z << 4u));
-        bool isOccupied = false;
-        if (microBit < 32u) {
-            isOccupied = (occ64.x & (1u << microBit)) != 0u;
-        } else {
-            isOccupied = (occ64.y & (1u << (microBit - 32u))) != 0u;
-        }
+        uint bitIdx = uint(cell.x | (cell.y << 3));
+        bool isOccupied = (bitIdx < 32u) 
+            ? ((occ64.x & (1u << bitIdx)) != 0u) 
+            : ((occ64.y & (1u << (bitIdx - 32u))) != 0u);
 
         if (isOccupied) {
             uint voxelID = ReadVoxelID(brickBase, cell);
             if (voxelID > 0u) {
-                float hitOffsetT;
-                uint normalFlag = NormalFlags(step, prevCell, tStart, rayDir, invDir, entryNormalFlags, hitOffsetT);
-                
+                float totalHitT = entryT + hitOffsetT;
                 AttributeData attrib;
-                attrib.matID_faceNormal = (voxelID << 16u) | (normalFlag & 0x3Fu);
-                ReportHit(entryT + hitOffsetT, 0, attrib);
+                attrib.matID_faceNormal = (voxelID << 16u) | (currentNormalFlag & 0x3Fu);
+                ReportHit(totalHitT, 0, attrib);
                 return;
             }
         }
 
-        prevCell = cell;
-        cell = VRTStep(cell, tStart, origin, rayDir, invDir);
+        // Step to next voxel along ray
+        if (tMax.x < tMax.y) {
+            if (tMax.x < tMax.z) {
+                cell.x += stepDir.x;
+                hitOffsetT = tMax.x;
+                tMax.x += tDelta.x;
+                currentNormalFlag = stepDir.x > 0 ? 0b000010 : 0b000001;
+            } else {
+                cell.z += stepDir.z;
+                hitOffsetT = tMax.z;
+                tMax.z += tDelta.z;
+                currentNormalFlag = stepDir.z > 0 ? 0b100000 : 0b010000;
+            }
+        } else {
+            if (tMax.y < tMax.z) {
+                cell.y += stepDir.y;
+                hitOffsetT = tMax.y;
+                tMax.y += tDelta.y;
+                currentNormalFlag = stepDir.y > 0 ? 0b001000 : 0b000100;
+            } else {
+                cell.z += stepDir.z;
+                hitOffsetT = tMax.z;
+                tMax.z += tDelta.z;
+                currentNormalFlag = stepDir.z > 0 ? 0b100000 : 0b010000;
+            }
+        }
     }
 }

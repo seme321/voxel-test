@@ -612,6 +612,19 @@ public partial class ChunkData : Resource
 		}
 	}
 
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	public bool IsSolid(int x, int y, int z) => GetVoxel(x, y, z) != Voxel.AIR;
+
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	public static ushort MapVoxelToRayTracingId(Voxel v) => v switch
+	{
+		Voxel.GRASS => 1,     // 1: 草地 (绿色)
+		Voxel.SAND => 4,      // 4: 沙地 (黄色)
+		Voxel.MOUNTAIN => 3,  // 3: 岩石/山脉 (灰色)
+		Voxel.SNOW => 5,      // 5: 白雪 (白色)
+		_ => 0                // 0: 空气 (跳过透明)
+	};
+
 	public int NumberOfVoxels() => numberOfVoxels;
 	public bool IsEmpty() => numberOfVoxels <= 0;
 
@@ -694,7 +707,7 @@ public partial class ChunkData : Resource
 				Span<byte> voxSpan = bSpan.Slice(72, 1024);
 				if (brick.IsUniform)
 				{
-					ushort matId = (ushort)brick.UniformVoxel;
+					ushort matId = MapVoxelToRayTracingId(brick.UniformVoxel);
 					for (int v = 0; v < 512; ++v)
 					{
 						System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(voxSpan.Slice(v * 2, 2), matId);
@@ -705,7 +718,7 @@ public partial class ChunkData : Resource
 					int pOff = brick.PayloadOffset;
 					for (int v = 0; v < 512; ++v)
 					{
-						ushort matId = (ushort)voxelPayloads[pOff + v];
+						ushort matId = MapVoxelToRayTracingId(voxelPayloads[pOff + v]);
 						System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(voxSpan.Slice(v * 2, 2), matId);
 					}
 				}

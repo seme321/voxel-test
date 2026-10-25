@@ -54,7 +54,7 @@ inline float3 GetVoxelColor(uint matID) {
         case 2: return float3(0.55, 0.40, 0.25); // Dirt brown
         case 3: return float3(0.50, 0.50, 0.50); // Stone gray
         case 4: return float3(0.85, 0.75, 0.45); // Sand yellow
-        case 5: return float3(0.40, 0.25, 0.15); // Wood bark
+        case 5: return float3(0.95, 0.95, 0.98); // Snow white
         case 6: return float3(0.20, 0.50, 0.20); // Leaves
         case 7: return float3(0.25, 0.45, 0.85); // Water blue
         default: return float3(0.80, 0.30, 0.70); // Custom / Debug magenta

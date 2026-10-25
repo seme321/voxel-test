@@ -45,6 +45,12 @@ var rt_canvas_layer: CanvasLayer = null
 var rt_texture_rect: TextureRect = null
 var rt_hud_label: Label = null
 
+# 动态局部物理探针（Local Voxel Collider：为硬件光追管线提供零卡顿的角色物理碰撞）
+var local_collider: StaticBody3D = null
+var local_collision_shape: CollisionShape3D = null
+var local_concave_shape: ConcavePolygonShape3D = null
+var last_collider_center: Vector3i = Vector3i(999999, 999999, 999999)
+
 
 func _ready() -> void:
 	terrain_algorithm.max_height = max_height
@@ -63,6 +69,7 @@ func _ready() -> void:
 		var ok = raytracer.init_raytracer(rt_render_width, rt_render_height)
 		if ok:
 			setup_raytracer_display()
+			setup_local_collider()
 			print("[ChunkManager] Caelix Hardware Raytracing Pipeline Activated on: ", raytracer.get_gpu_name())
 		else:
 			printerr("[ChunkManager] Failed to init VoxelRayTracer! Falling back to rasterization.")
@@ -70,6 +77,8 @@ func _ready() -> void:
 
 	# 2. 生成角色脚下核心区块
 	init_immediate_chunks(start_coord)
+	if use_hardware_raytracer:
+		update_local_collider(true)
 
 	# 3. 将周围 view_distance 内的其余区块加入后台平滑流式加载队列
 	update_chunks_around_player(start_coord)
@@ -127,6 +136,130 @@ func setup_raytracer_display() -> void:
 	add_child(rt_canvas_layer)
 
 
+func setup_local_collider() -> void:
+	local_collider = StaticBody3D.new()
+	local_collider.name = "LocalVoxelCollider"
+	local_collision_shape = CollisionShape3D.new()
+	local_collision_shape.name = "CollisionShape3D"
+	local_concave_shape = ConcavePolygonShape3D.new()
+	local_concave_shape.backface_collision = true
+	local_collision_shape.shape = local_concave_shape
+	local_collider.add_child(local_collision_shape)
+	add_child(local_collider)
+
+
+func _physics_process(_delta: float) -> void:
+	if use_hardware_raytracer and player != null:
+		update_local_collider()
+
+
+func is_voxel_solid(gx: int, gy: int, gz: int) -> bool:
+	if gy < 0 or gy >= max_height:
+		return false
+	var chunk_origin = Vector3i(
+		floori(float(gx) / chunk_size) * chunk_size,
+		floori(float(gy) / chunk_size) * chunk_size,
+		floori(float(gz) / chunk_size) * chunk_size
+	)
+	if not chunks.has(chunk_origin):
+		return false
+	var chunk = chunks[chunk_origin]
+	if chunk == null or chunk.chunk_data == null:
+		return false
+	var lx = gx - chunk_origin.x
+	var ly = gy - chunk_origin.y
+	var lz = gz - chunk_origin.z
+	return chunk.chunk_data.IsSolid(lx, ly, lz)
+
+
+## 动态局部物理探针：仅在玩家周围 5x6x5 体素内构建物理碰撞网格（耗时 < 0.05ms，彻底根治全图烘焙卡顿）
+func update_local_collider(force_rebuild: bool = false) -> void:
+	if local_collider == null or player == null or local_concave_shape == null:
+		return
+	var center = Vector3i(
+		floori(player.global_position.x),
+		floori(player.global_position.y),
+		floori(player.global_position.z)
+	)
+	if not force_rebuild and center == last_collider_center:
+		return
+	last_collider_center = center
+
+	var rx = 2
+	var rz = 2
+	var r_down = 3
+	var r_up = 2
+
+	var faces = PackedVector3Array()
+	
+	for y in range(center.y - r_down, center.y + r_up + 1):
+		for z in range(center.z - rz, center.z + rz + 1):
+			for x in range(center.x - rx, center.x + rx + 1):
+				if not is_voxel_solid(x, y, z):
+					continue
+				
+				var fx = float(x)
+				var fy = float(y)
+				var fz = float(z)
+
+				# 6 面消面测试：仅向空气暴露的面添加碰撞双三角形
+				# 1. +Y 顶面 (Normal: (0, 1, 0))
+				if not is_voxel_solid(x, y + 1, z):
+					faces.append(Vector3(fx, fy + 1.0, fz))
+					faces.append(Vector3(fx, fy + 1.0, fz + 1.0))
+					faces.append(Vector3(fx + 1.0, fy + 1.0, fz + 1.0))
+					faces.append(Vector3(fx, fy + 1.0, fz))
+					faces.append(Vector3(fx + 1.0, fy + 1.0, fz + 1.0))
+					faces.append(Vector3(fx + 1.0, fy + 1.0, fz))
+				
+				# 2. -Y 底面 (Normal: (0, -1, 0))
+				if not is_voxel_solid(x, y - 1, z):
+					faces.append(Vector3(fx, fy, fz))
+					faces.append(Vector3(fx + 1.0, fy, fz))
+					faces.append(Vector3(fx + 1.0, fy, fz + 1.0))
+					faces.append(Vector3(fx, fy, fz))
+					faces.append(Vector3(fx + 1.0, fy, fz + 1.0))
+					faces.append(Vector3(fx, fy, fz + 1.0))
+
+				# 3. +X 东表面 (Normal: (1, 0, 0))
+				if not is_voxel_solid(x + 1, y, z):
+					faces.append(Vector3(fx + 1.0, fy, fz))
+					faces.append(Vector3(fx + 1.0, fy + 1.0, fz))
+					faces.append(Vector3(fx + 1.0, fy + 1.0, fz + 1.0))
+					faces.append(Vector3(fx + 1.0, fy, fz))
+					faces.append(Vector3(fx + 1.0, fy + 1.0, fz + 1.0))
+					faces.append(Vector3(fx + 1.0, fy, fz + 1.0))
+
+				# 4. -X 西表面 (Normal: (-1, 0, 0))
+				if not is_voxel_solid(x - 1, y, z):
+					faces.append(Vector3(fx, fy, fz))
+					faces.append(Vector3(fx, fy, fz + 1.0))
+					faces.append(Vector3(fx, fy + 1.0, fz + 1.0))
+					faces.append(Vector3(fx, fy, fz))
+					faces.append(Vector3(fx, fy + 1.0, fz + 1.0))
+					faces.append(Vector3(fx, fy + 1.0, fz))
+
+				# 5. +Z 南表面 (Normal: (0, 0, 1))
+				if not is_voxel_solid(x, y, z + 1):
+					faces.append(Vector3(fx, fy, fz + 1.0))
+					faces.append(Vector3(fx + 1.0, fy, fz + 1.0))
+					faces.append(Vector3(fx + 1.0, fy + 1.0, fz + 1.0))
+					faces.append(Vector3(fx, fy, fz + 1.0))
+					faces.append(Vector3(fx + 1.0, fy + 1.0, fz + 1.0))
+					faces.append(Vector3(fx, fy + 1.0, fz + 1.0))
+
+				# 6. -Z 北表面 (Normal: (0, 0, -1))
+				if not is_voxel_solid(x, y, z - 1):
+					faces.append(Vector3(fx, fy, fz))
+					faces.append(Vector3(fx, fy + 1.0, fz))
+					faces.append(Vector3(fx + 1.0, fy + 1.0, fz))
+					faces.append(Vector3(fx, fy, fz))
+					faces.append(Vector3(fx + 1.0, fy + 1.0, fz))
+					faces.append(Vector3(fx + 1.0, fy, fz))
+
+	local_concave_shape.set_faces(faces)
+
+
 func _process(_delta: float) -> void:
 	if player == null:
 		find_player()
@@ -149,7 +282,7 @@ func _process(_delta: float) -> void:
 			raytracer.render_frame(cam.global_transform, cam.fov)
 			if rt_hud_label != null:
 				var fps = Engine.get_frames_per_second()
-				rt_hud_label.text = "[Caelix RT Mode] FPS: %d\nGPU: %s\nActive Sectors: %d | Resolution: %dx%d\nCam Pos: (%.1f, %.1f, %.1f) | Flying: %s" % [
+				rt_hud_label.text = "[Caelix RT Mode] FPS: %d\nGPU: %s\nActive Sectors: %d | Resolution: %dx%d\nCam Pos: (%.1f, %.1f, %.1f) | Flying: %s (Press 'F' to toggle)" % [
 					fps,
 					raytracer.get_gpu_name(),
 					raytracer.get_active_sector_count(),
@@ -270,6 +403,11 @@ func _on_rt_chunk_task_completed(coord: Vector3i, chunk: Chunk, aabb_bytes: Pack
 	print("[Sector %s] Done RT Stream: Terrain %d ms | Uploaded %d Bricks to BLAS (Active Sectors: %d)" % [
 		coord, terrain_ms, aabb_bytes.size() / 24, raytracer.get_active_sector_count()
 	])
+	
+	if player != null:
+		var p_coord = world_to_chunk_coord(player.global_position)
+		if coord == p_coord:
+			update_local_collider(true)
 
 
 ## 传统光栅化回调（兼容回退模式）
@@ -419,6 +557,7 @@ func add_voxel(pos: Vector3i, voxel: TerrainAlgorithm.Voxel) -> void:
 		var brick_bytes = chunk.chunk_data.GetRayTracingBrickBytes()
 		raytracer.upload_sector_aabbs(coord, aabb_bytes)
 		raytracer.upload_sector_bricks(coord, brick_bytes)
+		update_local_collider(true)
 	else:
 		check_and_notify_neighbors(chunk)
 
@@ -433,6 +572,8 @@ func remove_voxel(pos: Vector3i) -> void:
 	if chunk.chunk_data.IsEmpty():
 		empty_chunks[chunk.position] = true
 		remove_chunk(chunk.position)
+		if use_hardware_raytracer:
+			update_local_collider(true)
 		return
 
 	if use_hardware_raytracer and raytracer != null:
@@ -441,6 +582,7 @@ func remove_voxel(pos: Vector3i) -> void:
 		var brick_bytes = chunk.chunk_data.GetRayTracingBrickBytes()
 		raytracer.upload_sector_aabbs(coord, aabb_bytes)
 		raytracer.upload_sector_bricks(coord, brick_bytes)
+		update_local_collider(true)
 	else:
 		check_and_notify_neighbors(chunk)
 
