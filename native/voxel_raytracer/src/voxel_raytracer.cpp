@@ -30,6 +30,7 @@ void VoxelRayTracer::_bind_methods() {
     // Sector Upload
     ClassDB::bind_method(D_METHOD("upload_sector_aabbs", "sector_pos", "aabb_bytes"), &VoxelRayTracer::upload_sector_aabbs);
     ClassDB::bind_method(D_METHOD("upload_sector_bricks", "sector_pos", "brick_bytes"), &VoxelRayTracer::upload_sector_bricks);
+    ClassDB::bind_method(D_METHOD("patch_sector_brick", "sector_pos", "brick_index", "brick_bytes"), &VoxelRayTracer::patch_sector_brick);
     ClassDB::bind_method(D_METHOD("remove_sector", "sector_pos"), &VoxelRayTracer::remove_sector);
     ClassDB::bind_method(D_METHOD("get_active_sector_count"), &VoxelRayTracer::get_active_sector_count);
 
@@ -146,15 +147,41 @@ bool VoxelRayTracer::init_render_targets() {
         return false;
     }
 
-    // 3. Create Host-visible Staging Buffer for pixel readback
+    // 3. Create Double Buffering Staging Buffers & Command Buffers & Fences
     VkDeviceSize pixel_data_size = static_cast<VkDeviceSize>(render_width * render_height * 4);
-    if (!as_manager->create_buffer(pixel_data_size,
-                                   VK_BUFFER_USAGE_TRANSFER_DST_BIT,
-                                   VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                   staging_output_buffer)) {
-        UtilityFunctions::printerr("[VoxelRayTracer] Failed to create staging output buffer!");
-        return false;
+    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        if (!as_manager->create_buffer(pixel_data_size,
+                                       VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                       frames[i].staging_output_buffer)) {
+            UtilityFunctions::printerr("[VoxelRayTracer] Failed to create staging output buffer for frame ", (int)i);
+            return false;
+        }
+
+        VkCommandBufferAllocateInfo alloc_info;
+        memset(&alloc_info, 0, sizeof(alloc_info));
+        alloc_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+        alloc_info.commandPool = vk_context->command_pool;
+        alloc_info.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+        alloc_info.commandBufferCount = 1;
+
+        if (vk_context->vkAllocateCommandBuffers(vk_context->device, &alloc_info, &frames[i].command_buffer) != VK_SUCCESS) {
+            UtilityFunctions::printerr("[VoxelRayTracer] Failed to allocate command buffer for frame ", (int)i);
+            return false;
+        }
+
+        VkFenceCreateInfo fence_info;
+        memset(&fence_info, 0, sizeof(fence_info));
+        fence_info.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        fence_info.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+
+        if (vk_context->vkCreateFence(vk_context->device, &fence_info, nullptr, &frames[i].fence) != VK_SUCCESS) {
+            UtilityFunctions::printerr("[VoxelRayTracer] Failed to create fence for frame ", (int)i);
+            return false;
+        }
+        frames[i].has_rendered = false;
     }
+    current_frame = 0;
 
     // 4. Create Camera Uniform Buffer
     if (!as_manager->create_buffer(256,
@@ -248,8 +275,22 @@ void VoxelRayTracer::cleanup_render_targets() {
         descriptor_set = VK_NULL_HANDLE;
     }
 
+    for (uint32_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i) {
+        if (frames[i].fence != VK_NULL_HANDLE && vk_context->vkDestroyFence) {
+            vk_context->vkDestroyFence(vk_context->device, frames[i].fence, nullptr);
+            frames[i].fence = VK_NULL_HANDLE;
+        }
+        if (frames[i].command_buffer != VK_NULL_HANDLE && vk_context->vkFreeCommandBuffers) {
+            vk_context->vkFreeCommandBuffers(vk_context->device, vk_context->command_pool, 1, &frames[i].command_buffer);
+            frames[i].command_buffer = VK_NULL_HANDLE;
+        }
+        if (as_manager) {
+            as_manager->destroy_buffer(frames[i].staging_output_buffer);
+        }
+        frames[i].has_rendered = false;
+    }
+
     if (as_manager) {
-        as_manager->destroy_buffer(staging_output_buffer);
         as_manager->destroy_buffer(camera_uniform_buffer);
     }
 
@@ -453,6 +494,30 @@ void VoxelRayTracer::upload_sector_bricks(const Vector3i &p_pos, const PackedByt
     }
 }
 
+bool VoxelRayTracer::patch_sector_brick(const Vector3i &p_pos, int p_bindex, const PackedByteArray &p_brick_bytes) {
+    if (!as_manager || p_brick_bytes.size() < 1096 || p_bindex < 0) {
+        return false;
+    }
+
+    bool ok = as_manager->patch_sector_brick(p_pos, static_cast<uint32_t>(p_bindex), p_brick_bytes.ptr());
+    if (ok) {
+        int64_t key = get_sector_key(p_pos);
+        auto it = active_sectors.find(key);
+        if (it != active_sectors.end()) {
+            const uint8_t* raw = it->second.bricks.ptr();
+            uint32_t count = static_cast<uint32_t>(it->second.bricks.size() / 1096);
+            for (uint32_t i = 0; i < count; ++i) {
+                uint32_t w0 = *reinterpret_cast<const uint32_t*>(raw + i * 1096);
+                if ((w0 & 0xFFFu) == static_cast<uint32_t>(p_bindex)) {
+                    memcpy(it->second.bricks.ptrw() + i * 1096, p_brick_bytes.ptr(), 1096);
+                    break;
+                }
+            }
+        }
+    }
+    return ok;
+}
+
 void VoxelRayTracer::remove_sector(const Vector3i &p_pos) {
     int64_t key = get_sector_key(p_pos);
     active_sectors.erase(key);
@@ -471,7 +536,25 @@ void VoxelRayTracer::render_frame(const Transform3D &p_cam_transform, float p_fo
         return;
     }
 
-    // 1. Rebuild TLAS and update descriptors if geometry changed
+    FrameSync& frame = frames[current_frame];
+
+    // 1. Wait for this frame slot's previous GPU execution to complete
+    if (frame.fence != VK_NULL_HANDLE && vk_context->vkWaitForFences) {
+        vk_context->vkWaitForFences(vk_context->device, 1, &frame.fence, VK_TRUE, UINT64_MAX);
+    }
+
+    // 2. Transfer completed pixels from previous frame into Godot Image & Texture
+    if (frame.has_rendered && frame.staging_output_buffer.mapped_ptr && output_pixel_buffer.size() >= render_width * render_height * 4) {
+        memcpy(output_pixel_buffer.ptrw(), frame.staging_output_buffer.mapped_ptr, render_width * render_height * 4);
+        output_image->set_data(render_width, render_height, false, Image::FORMAT_RGBA8, output_pixel_buffer);
+        output_texture->update(output_image);
+    }
+
+    if (frame.fence != VK_NULL_HANDLE && vk_context->vkResetFences) {
+        vk_context->vkResetFences(vk_context->device, 1, &frame.fence);
+    }
+
+    // 3. Rebuild TLAS and update descriptors if geometry changed
     if (tlas_dirty) {
         as_manager->build_tlas();
         tlas_dirty = false;
@@ -482,7 +565,7 @@ void VoxelRayTracer::render_frame(const Transform3D &p_cam_transform, float p_fo
         return;
     }
 
-    // 2. Compute Camera Matrices (Column-major format for HLSL)
+    // 4. Compute Camera Matrices (Column-major format for HLSL)
     CameraParams cam;
     memset(&cam, 0, sizeof(cam));
 
@@ -491,37 +574,31 @@ void VoxelRayTracer::render_frame(const Transform3D &p_cam_transform, float p_fo
     Vector3 back = p_cam_transform.basis.get_column(2);
     Vector3 origin = p_cam_transform.origin;
 
-    // viewInverse: Column-major matrix matching camera basis and world origin
-    // Col 0: Right vector
     cam.viewInverse[0]  = right.x;
     cam.viewInverse[1]  = right.y;
     cam.viewInverse[2]  = right.z;
     cam.viewInverse[3]  = 0.0f;
-    // Col 1: Up vector
     cam.viewInverse[4]  = up.x;
     cam.viewInverse[5]  = up.y;
     cam.viewInverse[6]  = up.z;
     cam.viewInverse[7]  = 0.0f;
-    // Col 2: Back vector (-Forward)
     cam.viewInverse[8]  = back.x;
     cam.viewInverse[9]  = back.y;
     cam.viewInverse[10] = back.z;
     cam.viewInverse[11] = 0.0f;
-    // Col 3: Translation (Camera world position)
     cam.viewInverse[12] = origin.x;
     cam.viewInverse[13] = origin.y;
     cam.viewInverse[14] = origin.z;
     cam.viewInverse[15] = 1.0f;
 
-    // projInverse: Perspective projection inverse (Column-major)
     float aspect = static_cast<float>(render_width) / static_cast<float>(render_height);
     float fov_rad = p_fov * 3.14159265358979323846f / 180.0f;
     float tan_half_fov = std::tan(fov_rad * 0.5f);
 
-    cam.projInverse[0]  = aspect * tan_half_fov; // Row 0, Col 0
-    cam.projInverse[5]  = tan_half_fov;          // Row 1, Col 1
-    cam.projInverse[14] = -1.0f;                 // Row 2, Col 3
-    cam.projInverse[15] = 1.0f;                  // Row 3, Col 3
+    cam.projInverse[0]  = aspect * tan_half_fov;
+    cam.projInverse[5]  = tan_half_fov;
+    cam.projInverse[14] = -1.0f;
+    cam.projInverse[15] = 1.0f;
 
     cam.camPos[0] = origin.x;
     cam.camPos[1] = origin.y;
@@ -533,13 +610,17 @@ void VoxelRayTracer::render_frame(const Transform3D &p_cam_transform, float p_fo
     cam.height = static_cast<uint32_t>(render_height);
     cam.frameIndex = frame_index++;
 
-    // Upload Camera UBO
     if (camera_uniform_buffer.mapped_ptr) {
         memcpy(camera_uniform_buffer.mapped_ptr, &cam, sizeof(CameraParams));
     }
 
-    // 3. Dispatch Ray Tracing Pipeline
-    VkCommandBuffer cmd = as_manager->begin_single_time_commands();
+    // 5. Record Ray Tracing commands into frame.command_buffer
+    VkCommandBuffer cmd = frame.command_buffer;
+    VkCommandBufferBeginInfo begin_info;
+    memset(&begin_info, 0, sizeof(begin_info));
+    begin_info.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    begin_info.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vk_context->vkBeginCommandBuffer(cmd, &begin_info);
 
     // Bind RT Pipeline
     vk_context->vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_RAY_TRACING_KHR, rt_pipeline->pipeline);
@@ -560,7 +641,7 @@ void VoxelRayTracer::render_frame(const Transform3D &p_cam_transform, float p_fo
                                  static_cast<uint32_t>(render_height),
                                  1);
 
-    // 4. Memory Barrier & Readback: Copy Image -> Staging Buffer
+    // 6. Memory Barrier & Copy Image -> Current Staging Buffer
     VkImageMemoryBarrier barrier_to_copy;
     memset(&barrier_to_copy, 0, sizeof(barrier_to_copy));
     barrier_to_copy.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
@@ -593,7 +674,7 @@ void VoxelRayTracer::render_frame(const Transform3D &p_cam_transform, float p_fo
     vk_context->vkCmdCopyImageToBuffer(cmd,
                                        vk_render_target,
                                        VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
-                                       staging_output_buffer.buffer,
+                                       frame.staging_output_buffer.buffer,
                                        1, &copy_region);
 
     // Transition back to GENERAL layout
@@ -608,14 +689,18 @@ void VoxelRayTracer::render_frame(const Transform3D &p_cam_transform, float p_fo
                                      VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR,
                                      0, 0, nullptr, 0, nullptr, 1, &barrier_to_general);
 
-    as_manager->end_single_time_commands(cmd);
+    vk_context->vkEndCommandBuffer(cmd);
 
-    // 5. Transfer pixels into Godot Image & Texture
-    if (staging_output_buffer.mapped_ptr && output_pixel_buffer.size() >= render_width * render_height * 4) {
-        memcpy(output_pixel_buffer.ptrw(), staging_output_buffer.mapped_ptr, render_width * render_height * 4);
-        output_image->set_data(render_width, render_height, false, Image::FORMAT_RGBA8, output_pixel_buffer);
-        output_texture->update(output_image);
-    }
+    // 7. Submit to GPU Queue with fence (ZERO vkQueueWaitIdle!)
+    VkSubmitInfo submit_info;
+    memset(&submit_info, 0, sizeof(submit_info));
+    submit_info.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submit_info.commandBufferCount = 1;
+    submit_info.pCommandBuffers = &cmd;
+    vk_context->vkQueueSubmit(vk_context->queue, 1, &submit_info, frame.fence);
+
+    frame.has_rendered = true;
+    current_frame = (current_frame + 1) % MAX_FRAMES_IN_FLIGHT;
 }
 
 Ref<ImageTexture> VoxelRayTracer::get_output_texture() {

@@ -551,15 +551,24 @@ func add_voxel(pos: Vector3i, voxel: int = 1) -> void:
 		empty_chunks.erase(chunk_origin)
 	
 	var local_position = global_to_local(pos)
+	var b_idx = chunk.chunk_data.GetBrickIndex(local_position.x, local_position.y, local_position.z)
+	var solid_before = chunk.chunk_data.IsBrickSolid(b_idx)
+
 	chunk.add_voxel(local_position, voxel)
 	
+	var solid_after = chunk.chunk_data.IsBrickSolid(b_idx)
+
 	if use_hardware_raytracer and raytracer != null:
 		var coord = world_to_chunk_coord(chunk.position)
-		var rt_data = chunk.chunk_data.GetRayTracingData()
-		var aabb_bytes = rt_data[0]
-		var brick_bytes = rt_data[1]
-		raytracer.upload_sector_aabbs(coord, aabb_bytes)
-		raytracer.upload_sector_bricks(coord, brick_bytes)
+		var patched = false
+		if solid_before and solid_after:
+			var b_bytes = chunk.chunk_data.SerializeSingleBrick(b_idx)
+			patched = raytracer.patch_sector_brick(coord, b_idx, b_bytes)
+
+		if not patched:
+			var rt_data = chunk.chunk_data.GetRayTracingData()
+			raytracer.upload_sector_aabbs(coord, rt_data[0])
+			raytracer.upload_sector_bricks(coord, rt_data[1])
 		update_local_collider(true)
 	else:
 		check_and_notify_neighbors(chunk)
@@ -570,6 +579,9 @@ func remove_voxel(pos: Vector3i) -> void:
 	if !chunk: return
 	
 	var local_position = global_to_local(pos)	
+	var b_idx = chunk.chunk_data.GetBrickIndex(local_position.x, local_position.y, local_position.z)
+	var solid_before = chunk.chunk_data.IsBrickSolid(b_idx)
+
 	chunk.remove_voxel(local_position)
 	
 	if chunk.chunk_data.IsEmpty():
@@ -579,13 +591,19 @@ func remove_voxel(pos: Vector3i) -> void:
 			update_local_collider(true)
 		return
 
+	var solid_after = chunk.chunk_data.IsBrickSolid(b_idx)
+
 	if use_hardware_raytracer and raytracer != null:
 		var coord = world_to_chunk_coord(chunk.position)
-		var rt_data = chunk.chunk_data.GetRayTracingData()
-		var aabb_bytes = rt_data[0]
-		var brick_bytes = rt_data[1]
-		raytracer.upload_sector_aabbs(coord, aabb_bytes)
-		raytracer.upload_sector_bricks(coord, brick_bytes)
+		var patched = false
+		if solid_before and solid_after:
+			var b_bytes = chunk.chunk_data.SerializeSingleBrick(b_idx)
+			patched = raytracer.patch_sector_brick(coord, b_idx, b_bytes)
+
+		if not patched:
+			var rt_data = chunk.chunk_data.GetRayTracingData()
+			raytracer.upload_sector_aabbs(coord, rt_data[0])
+			raytracer.upload_sector_bricks(coord, rt_data[1])
 		update_local_collider(true)
 	else:
 		check_and_notify_neighbors(chunk)

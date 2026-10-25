@@ -25,6 +25,7 @@ struct SectorBLAS {
     VkAccelerationStructureKHR blas = VK_NULL_HANDLE;
     VkDeviceAddress blas_address = 0;
     uint32_t global_brick_offset = 0;
+    std::unordered_map<uint32_t, uint32_t> bindex_to_slot;
 };
 
 class VulkanASManager {
@@ -58,6 +59,7 @@ public:
                            uint32_t p_aabb_count, const void* p_aabb_data,
                            uint32_t p_brick_count, const void* p_brick_data);
     void remove_sector_blas(const Vector3i& p_pos);
+    bool patch_sector_brick(const Vector3i& p_pos, uint32_t p_bindex, const void* p_brick_1096);
 
     // TLAS Management
     bool build_tlas();

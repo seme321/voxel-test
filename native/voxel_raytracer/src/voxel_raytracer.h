@@ -50,8 +50,18 @@ private:
     VkImage vk_render_target = VK_NULL_HANDLE;
     VkDeviceMemory vk_render_target_memory = VK_NULL_HANDLE;
     VkImageView vk_render_target_view = VK_NULL_HANDLE;
-    VulkanBuffer staging_output_buffer;
     VulkanBuffer camera_uniform_buffer;
+
+    // Double Buffering Frames-in-Flight
+    static const uint32_t MAX_FRAMES_IN_FLIGHT = 2;
+    struct FrameSync {
+        VkCommandBuffer command_buffer = VK_NULL_HANDLE;
+        VkFence fence = VK_NULL_HANDLE;
+        VulkanBuffer staging_output_buffer;
+        bool has_rendered = false;
+    };
+    FrameSync frames[MAX_FRAMES_IN_FLIGHT];
+    uint32_t current_frame = 0;
 
     // Descriptors
     VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
@@ -105,6 +115,7 @@ public:
     void upload_sector_aabbs(const Vector3i &p_pos, const PackedByteArray &p_aabbs);
     void upload_sector_bricks(const Vector3i &p_pos, const PackedByteArray &p_bricks);
     void remove_sector(const Vector3i &p_pos);
+    bool patch_sector_brick(const Vector3i &p_pos, int p_bindex, const PackedByteArray &p_brick_bytes);
     int get_active_sector_count() const;
 
     // Render & Presentation

@@ -62,6 +62,13 @@ public:
     PFN_vkQueueWaitIdle vkQueueWaitIdle = nullptr;
     PFN_vkDeviceWaitIdle vkDeviceWaitIdle = nullptr;
 
+    // Synchronization (Fences)
+    PFN_vkCreateFence vkCreateFence = nullptr;
+    PFN_vkDestroyFence vkDestroyFence = nullptr;
+    PFN_vkWaitForFences vkWaitForFences = nullptr;
+    PFN_vkResetFences vkResetFences = nullptr;
+    PFN_vkGetFenceStatus vkGetFenceStatus = nullptr;
+
     // Buffers & Memory
     PFN_vkCreateBuffer vkCreateBuffer = nullptr;
     PFN_vkDestroyBuffer vkDestroyBuffer = nullptr;

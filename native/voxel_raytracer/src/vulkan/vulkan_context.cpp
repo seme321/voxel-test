@@ -263,6 +263,12 @@ bool VulkanContext::load_device_functions() {
     LOAD_DEV_FN(vkQueueWaitIdle);
     LOAD_DEV_FN(vkDeviceWaitIdle);
 
+    LOAD_DEV_FN(vkCreateFence);
+    LOAD_DEV_FN(vkDestroyFence);
+    LOAD_DEV_FN(vkWaitForFences);
+    LOAD_DEV_FN(vkResetFences);
+    LOAD_DEV_FN(vkGetFenceStatus);
+
     LOAD_DEV_FN(vkCreateBuffer);
     LOAD_DEV_FN(vkDestroyBuffer);
     LOAD_DEV_FN(vkGetBufferMemoryRequirements);

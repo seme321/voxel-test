@@ -743,6 +743,74 @@ public partial class ChunkData : Resource
 		return new Godot.Collections.Array<byte[]> { aabb, brick };
 	}
 
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	public int GetBrickIndex(int lx, int ly, int lz)
+	{
+		int bx = lx >> BRICK_SHIFT;
+		int by = ly >> BRICK_SHIFT;
+		int bz = lz >> BRICK_SHIFT;
+		return bx | (by * bricksPerAxis) | (bz * bricksPerAxis * bricksPerAxis);
+	}
+
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	public bool IsBrickSolid(int bIndex)
+	{
+		if ((uint)bIndex >= (uint)totalBricks) return false;
+		return (CoarseOccupancy[bIndex >> 6] & (1UL << (bIndex & 63))) != 0;
+	}
+
+	/// <summary>
+	/// 仅导出单个 8x8x8 Brick 的 1096 字节记录，供微秒级 GPU 显存原地 Patch
+	/// </summary>
+	public byte[] SerializeSingleBrick(int bIndex)
+	{
+		if ((uint)bIndex >= (uint)totalBricks) return Array.Empty<byte>();
+		ref VoxelBrick brick = ref bricks[bIndex];
+
+		byte[] bSpanBytes = new byte[1096];
+		Span<byte> bSpan = bSpanBytes;
+
+		uint word0 = (uint)(bIndex & 0xFFF) | (0xFFu << 16);
+		System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(bSpan.Slice(0, 4), word0);
+
+		uint tightBounds = 0u | (0u << 3) | (0u << 6) | (7u << 9) | (7u << 12) | (7u << 15);
+		System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(bSpan.Slice(4, 4), tightBounds);
+
+		System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bSpan.Slice(8, 8), brick.Mask0);
+		System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bSpan.Slice(16, 8), brick.Mask1);
+		System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bSpan.Slice(24, 8), brick.Mask2);
+		System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bSpan.Slice(32, 8), brick.Mask3);
+		System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bSpan.Slice(40, 8), brick.Mask4);
+		System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bSpan.Slice(48, 8), brick.Mask5);
+		System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bSpan.Slice(56, 8), brick.Mask6);
+		System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bSpan.Slice(64, 8), brick.Mask7);
+
+		Span<byte> voxSpan = bSpan.Slice(72, 1024);
+		if (brick.IsUniform)
+		{
+			ushort matId = MapVoxelToRayTracingId(brick.UniformVoxel);
+			for (int v = 0; v < 512; ++v)
+			{
+				System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(voxSpan.Slice(v * 2, 2), matId);
+			}
+		}
+		else if (brick.PayloadOffset >= 0)
+		{
+			int pOff = brick.PayloadOffset;
+			for (int v = 0; v < 512; ++v)
+			{
+				ushort matId = MapVoxelToRayTracingId(voxelPayloads[pOff + v]);
+				System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(voxSpan.Slice(v * 2, 2), matId);
+			}
+		}
+		else
+		{
+			voxSpan.Clear();
+		}
+
+		return bSpanBytes;
+	}
+
 	public byte[] GetRayTracingAabbBytes() => SerializeRayTracingData().aabbBytes;
 	public byte[] GetRayTracingBrickBytes() => SerializeRayTracingData().brickBytes;
 }

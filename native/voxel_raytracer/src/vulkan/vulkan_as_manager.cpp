@@ -210,10 +210,18 @@ bool VulkanASManager::build_sector_blas(const Vector3i& p_pos,
     sector.brick_count = p_brick_count;
 
     // Cache brick payload for global SSBO assembly
+    sector.bindex_to_slot.clear();
     if (p_brick_count > 0 && p_brick_data) {
         size_t brick_bytes = p_brick_count * 1096;
         sector.brick_data.resize(brick_bytes);
         memcpy(sector.brick_data.data(), p_brick_data, brick_bytes);
+
+        const uint8_t* raw = static_cast<const uint8_t*>(p_brick_data);
+        for (uint32_t i = 0; i < p_brick_count; ++i) {
+            uint32_t word0 = *reinterpret_cast<const uint32_t*>(raw + i * 1096);
+            uint32_t bIndex = word0 & 0xFFFu;
+            sector.bindex_to_slot[bIndex] = i;
+        }
     } else {
         sector.brick_data.clear();
     }
@@ -345,6 +353,36 @@ void VulkanASManager::remove_sector_blas(const Vector3i& p_pos) {
     sectors.erase(it);
 
     UtilityFunctions::print("[VulkanASManager] Removed BLAS for sector (", p_pos.x, ",", p_pos.y, ",", p_pos.z, ")");
+}
+
+bool VulkanASManager::patch_sector_brick(const Vector3i& p_pos, uint32_t p_bindex, const void* p_brick_1096) {
+    int64_t key = get_sector_key(p_pos);
+    auto it = sectors.find(key);
+    if (it == sectors.end() || !p_brick_1096) {
+        return false;
+    }
+
+    SectorBLAS& s = it->second;
+    auto slot_it = s.bindex_to_slot.find(p_bindex);
+    if (slot_it == s.bindex_to_slot.end()) {
+        return false;
+    }
+
+    uint32_t slot = slot_it->second;
+    if (slot >= s.brick_count || (slot * 1096 + 1096) > s.brick_data.size()) {
+        return false;
+    }
+
+    // 1. Update CPU backup brick data
+    memcpy(s.brick_data.data() + (slot * 1096), p_brick_1096, 1096);
+
+    // 2. Direct sub-microsecond in-place memory write to GPU global SSBO
+    if (global_brick_buffer.mapped_ptr) {
+        uint8_t* dst = static_cast<uint8_t*>(global_brick_buffer.mapped_ptr) + ((s.global_brick_offset + slot) * 1096);
+        memcpy(dst, p_brick_1096, 1096);
+    }
+
+    return true;
 }
 
 bool VulkanASManager::build_tlas() {
