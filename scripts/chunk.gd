@@ -7,6 +7,7 @@ const SUB_CHUNK_SIZE: int = 32
 
 var meshing_algorithm: MeshingAlgorithm
 var chunk_data: ChunkData = ChunkData.new()
+var is_raytracing_mode: bool = false
 
 # sub_coord Vector3i -> StaticBody3D
 var sub_chunks: Dictionary = {}
@@ -156,12 +157,14 @@ func remesh() -> void:
 
 func remove_voxel(pos: Vector3i) -> void:
 	chunk_data.RemoveVoxel(pos.x, pos.y, pos.z)
-	flush_dirty()
+	if not is_raytracing_mode:
+		flush_dirty()
 
 
 func add_voxel(pos: Vector3i, voxel: int) -> void:
 	chunk_data.AddVoxel(pos.x, pos.y, pos.z, voxel)
-	flush_dirty()
+	if not is_raytracing_mode:
+		flush_dirty()
 
 
 func clear_sub_chunks() -> void:

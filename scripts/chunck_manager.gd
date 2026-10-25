@@ -588,6 +588,7 @@ func create_chunk(chunk_position: Vector3i) -> Chunk:
 	chunk.chunk_data.SetSize(chunk_size)
 	chunk.meshing_algorithm = meshing_algorithm
 	chunk.position = chunk_position
+	chunk.is_raytracing_mode = use_hardware_raytracer
 	chunks[chunk.position] = chunk
 	return chunk
 

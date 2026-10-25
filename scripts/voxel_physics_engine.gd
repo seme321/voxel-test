@@ -109,7 +109,7 @@ func notify_voxel_removed(pos: Vector3i) -> void:
 		var nb = pos + dir
 		var nb_type = chunk_manager.get_voxel(nb.x, nb.y, nb.z)
 		if VoxelTypes.is_fluid(nb_type):
-			activate_fluid(nb, initial_wake_delay, 3)
+			activate_fluid(nb, initial_wake_delay, 1)
 
 	# 3. 结构力学连通分量承重分析（浮空悬崖/被截断桥梁转化为 3D 刚体碎片崩塌）
 	if enable_structural_integrity:
@@ -130,7 +130,7 @@ func notify_voxel_placed(pos: Vector3i, type: int) -> void:
 		active_fluids[pos] = {
 			"type": type,
 			"timer": initial_wake_delay,
-			"energy": 3,
+			"energy": 1,
 			"from_dir": Vector3i.ZERO
 		}
 
@@ -139,7 +139,7 @@ func notify_voxel_placed(pos: Vector3i, type: int) -> void:
 		var nb = pos + dir
 		var nb_type = chunk_manager.get_voxel(nb.x, nb.y, nb.z)
 		if VoxelTypes.is_fluid(nb_type):
-			activate_fluid(nb, initial_wake_delay, 3)
+			activate_fluid(nb, initial_wake_delay, 1)
 
 
 # -----------------------------------------------------------------------------
@@ -287,18 +287,18 @@ func _process_fluids(delta: float, current_steps: int) -> int:
 			next_fluids[below_pos] = {
 				"type": v_type,
 				"timer": fluid_fall_delay,
-				"energy": 3,
+				"energy": 1,
 				"from_dir": Vector3i.DOWN
 			}
 			# 仅当正上方确实是水体时才唤醒形成水柱
 			var above_pos = pos + Vector3i(0, 1, 0)
 			if chunk_manager.get_voxel(above_pos.x, above_pos.y, above_pos.z) == v_type:
-				activate_fluid(above_pos, fluid_fall_delay * 0.8, 3)
+				activate_fluid(above_pos, fluid_fall_delay * 0.8, 1)
 			# 仅唤醒周围切实存在的水体方块涌向缺口
 			for dir in HORIZONTAL_DIRECTIONS:
 				var side = pos + dir
 				if chunk_manager.get_voxel(side.x, side.y, side.z) == v_type:
-					activate_fluid(side, fluid_fall_delay, 3)
+					activate_fluid(side, fluid_fall_delay, 1)
 			steps += 1
 			continue
 
@@ -328,16 +328,16 @@ func _process_fluids(delta: float, current_steps: int) -> int:
 			next_fluids[target_pos] = {
 				"type": v_type,
 				"timer": fluid_fall_delay,
-				"energy": 3,
+				"energy": 1,
 				"from_dir": drop_dirs[0]
 			}
 			var above_pos = pos + Vector3i(0, 1, 0)
 			if chunk_manager.get_voxel(above_pos.x, above_pos.y, above_pos.z) == v_type:
-				activate_fluid(above_pos, fluid_fall_delay * 0.8, 3)
+				activate_fluid(above_pos, fluid_fall_delay * 0.8, 1)
 			for dir in HORIZONTAL_DIRECTIONS:
 				var side = pos + dir
 				if chunk_manager.get_voxel(side.x, side.y, side.z) == v_type:
-					activate_fluid(side, fluid_flow_delay, 3)
+					activate_fluid(side, fluid_flow_delay, 1)
 			steps += 1
 			continue
 
@@ -348,7 +348,7 @@ func _process_fluids(delta: float, current_steps: int) -> int:
 			var chosen_dir = flat_dirs[0]
 			var target_pos = pos + chosen_dir
 			move_voxel(pos, target_pos, v_type)
-			var new_energy = 3 if has_water_pressure else (energy - 1)
+			var new_energy = 1 if has_water_pressure else (energy - 1)
 			next_fluids[target_pos] = {
 				"type": v_type,
 				"timer": fluid_flow_delay,
@@ -356,7 +356,7 @@ func _process_fluids(delta: float, current_steps: int) -> int:
 				"from_dir": chosen_dir
 			}
 			if has_water_pressure:
-				activate_fluid(pos + Vector3i(0, 1, 0), fluid_fall_delay, 3)
+				activate_fluid(pos + Vector3i(0, 1, 0), fluid_fall_delay, 1)
 			steps += 1
 			continue
 
