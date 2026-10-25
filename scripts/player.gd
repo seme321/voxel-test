@@ -12,11 +12,100 @@ var flying: bool = false
 var floor_logged: bool = false
 var chunk_manager: ChunkManager = null
 
+# -----------------------------------------------------------------------------
+# 路线 A：交互品质体系 (准星高亮线框、放置幽灵预览、挖掘硬度与破碎粒子)
+# -----------------------------------------------------------------------------
+var selection_box: MeshInstance3D = null
+var ghost_box: MeshInstance3D = null
+var ghost_material: StandardMaterial3D = null
+
+var mining_progress_bar: ProgressBar = null
+var current_mining_target: Vector3i = Vector3i(999999, 999999, 999999)
+var mining_progress: float = 0.0
+var current_hit: Dictionary = {"hit": false}
+
 
 func _ready() -> void:
 	add_to_group("player")
 	if get_parent() != null and get_parent().has_node("ChunckManager"):
 		chunk_manager = get_parent().get_node("ChunckManager") as ChunkManager
+
+	_setup_interaction_visuals()
+	_setup_mining_hud()
+
+
+## 构建准星高亮线框与放置幽灵预览网格
+func _setup_interaction_visuals() -> void:
+	# 1. 准星选中体素高亮 3D 线框
+	selection_box = MeshInstance3D.new()
+	selection_box.name = "TargetSelectionBox"
+	selection_box.mesh = _create_wireframe_cube_mesh(1.004)
+	
+	var wire_mat = StandardMaterial3D.new()
+	wire_mat.shading_mode = StandardMaterial3D.SHADING_MODE_UNSHADED
+	wire_mat.albedo_color = Color(0.05, 0.05, 0.05, 0.90)
+	wire_mat.render_priority = 2
+	selection_box.material_override = wire_mat
+	selection_box.visible = false
+	get_parent().call_deferred("add_child", selection_box)
+
+	# 2. 即将依附放置的目标方块半透明幽灵预览
+	ghost_box = MeshInstance3D.new()
+	ghost_box.name = "PlacementGhostBox"
+	var box_mesh = BoxMesh.new()
+	box_mesh.size = Vector3(1.002, 1.002, 1.002)
+	ghost_box.mesh = box_mesh
+	
+	ghost_material = StandardMaterial3D.new()
+	ghost_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	ghost_material.shading_mode = StandardMaterial3D.SHADING_MODE_UNSHADED
+	ghost_material.albedo_color = Color(1.0, 1.0, 1.0, 0.40)
+	ghost_material.render_priority = 1
+	ghost_box.material_override = ghost_material
+	ghost_box.visible = false
+	get_parent().call_deferred("add_child", ghost_box)
+
+
+## 构建挖掘进度 UI 进度条（置于准星正下方）
+func _setup_mining_hud() -> void:
+	var hud_layer = CanvasLayer.new()
+	hud_layer.layer = 12
+	
+	mining_progress_bar = ProgressBar.new()
+	mining_progress_bar.name = "MiningProgressBar"
+	mining_progress_bar.anchor_left = 0.5
+	mining_progress_bar.anchor_right = 0.5
+	mining_progress_bar.anchor_top = 0.5
+	mining_progress_bar.anchor_bottom = 0.5
+	mining_progress_bar.offset_left = -24
+	mining_progress_bar.offset_right = 24
+	mining_progress_bar.offset_top = 20
+	mining_progress_bar.offset_bottom = 26
+	mining_progress_bar.show_percentage = false
+	mining_progress_bar.min_value = 0.0
+	mining_progress_bar.max_value = 1.0
+	mining_progress_bar.value = 0.0
+	mining_progress_bar.visible = false
+
+	# 简约现代风格底板与填充色
+	var bg_style = StyleBoxFlat.new()
+	bg_style.bg_color = Color(0.0, 0.0, 0.0, 0.6)
+	bg_style.corner_radius_top_left = 3
+	bg_style.corner_radius_top_right = 3
+	bg_style.corner_radius_bottom_left = 3
+	bg_style.corner_radius_bottom_right = 3
+	mining_progress_bar.add_theme_stylebox_override("background", bg_style)
+
+	var fill_style = StyleBoxFlat.new()
+	fill_style.bg_color = Color(0.25, 0.9, 0.5, 0.95)
+	fill_style.corner_radius_top_left = 3
+	fill_style.corner_radius_top_right = 3
+	fill_style.corner_radius_bottom_left = 3
+	fill_style.corner_radius_bottom_right = 3
+	mining_progress_bar.add_theme_stylebox_override("fill", fill_style)
+
+	hud_layer.add_child(mining_progress_bar)
+	add_child(hud_layer)
 
 
 func _physics_process(delta: float) -> void:
@@ -52,6 +141,165 @@ func _physics_process(delta: float) -> void:
 		print("[PHYSICS SUCCESS] Player landed on ground! Pos: ", global_position, " IsOnFloor: ", is_on_floor())
 
 
+func _process(delta: float) -> void:
+	_update_raycast_and_visuals(delta)
+
+
+## 逐帧高频射线检测、线框吸附与连续挖掘进度驱动
+func _update_raycast_and_visuals(delta: float) -> void:
+	if eye_camera == null or chunk_manager == null:
+		return
+
+	var cam_forward = -eye_camera.global_transform.basis.z.normalized()
+	current_hit = raycast_voxel(eye_camera.global_position, cam_forward, 8.0)
+
+	if current_hit.get("hit", false):
+		var hit_pos: Vector3i = current_hit["position"]
+		var hit_norm: Vector3i = current_hit["normal"]
+		var base_center = Vector3(hit_pos) + Vector3(0.5, 0.5, 0.5)
+
+		# 1. 更新准星高亮线框
+		if selection_box != null:
+			selection_box.visible = true
+			selection_box.global_position = base_center
+
+		# 2. 更新即将放置位置的幽灵半透明预览
+		var place_pos = hit_pos + hit_norm
+		if ghost_box != null:
+			if can_place_at(place_pos):
+				ghost_box.visible = true
+				ghost_box.global_position = Vector3(place_pos) + Vector3(0.5, 0.5, 0.5)
+				
+				# 材质色彩与当前快捷栏手持方块同步
+				var cur_v = hotbar.get_selected_voxel() if hotbar != null else VoxelTypes.Type.GRASS
+				var palette_col: Color = VoxelTypes.get_palette().get(cur_v, Color(0.8, 0.8, 0.8, 1.0))
+				if ghost_material != null:
+					ghost_material.albedo_color = Color(palette_col.r, palette_col.g, palette_col.b, 0.45)
+			else:
+				ghost_box.visible = false
+
+		# 3. 按住鼠标左键持续挖掘与硬度判定
+		var is_mining = Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED
+		if is_mining:
+			if hit_pos == current_mining_target:
+				if flying:
+					# 飞行/上帝创造模式：瞬破
+					break_target_voxel(hit_pos)
+				else:
+					var target_v = chunk_manager.get_voxel(hit_pos.x, hit_pos.y, hit_pos.z)
+					var hardness = VoxelTypes.get_hardness(target_v)
+					if hardness <= 0.05:
+						break_target_voxel(hit_pos, target_v)
+					else:
+						mining_progress += delta
+						if mining_progress_bar != null:
+							mining_progress_bar.visible = true
+							mining_progress_bar.value = clampf(mining_progress / hardness, 0.0, 1.0)
+						
+						# 挖掘受力微抖动震颤视觉反馈
+						var shake_factor = (mining_progress / hardness) * 0.035
+						var shake = Vector3(
+							randf_range(-1, 1),
+							randf_range(-1, 1),
+							randf_range(-1, 1)
+						) * shake_factor
+						if selection_box != null:
+							selection_box.global_position = base_center + shake
+
+						# 达到方块硬度时间，彻底破坏！
+						if mining_progress >= hardness:
+							break_target_voxel(hit_pos, target_v)
+							_reset_mining_state()
+			else:
+				# 切换了挖掘目标方块，重置进度
+				current_mining_target = hit_pos
+				mining_progress = 0.0
+				if mining_progress_bar != null:
+					mining_progress_bar.visible = false
+		else:
+			_reset_mining_state()
+
+	else:
+		# 准星看向天空或超出 8 米射程，隐藏一切高亮视觉并清空挖掘状态
+		if selection_box != null:
+			selection_box.visible = false
+		if ghost_box != null:
+			ghost_box.visible = false
+		_reset_mining_state()
+
+
+func _reset_mining_state() -> void:
+	mining_progress = 0.0
+	current_mining_target = Vector3i(999999, 999999, 999999)
+	if mining_progress_bar != null:
+		mining_progress_bar.visible = false
+
+
+## 破坏目标方块并生成微型体素破碎粒子溅射
+func break_target_voxel(pos: Vector3i, v_type: int = -1) -> void:
+	if chunk_manager == null:
+		return
+	if v_type < 0:
+		v_type = chunk_manager.get_voxel(pos.x, pos.y, pos.z)
+	
+	spawn_break_particles(Vector3(pos), v_type)
+	chunk_manager.remove_voxel(pos)
+
+
+## 溅射方块碎裂粒子特效 (Voxel Shatter Dust)
+func spawn_break_particles(pos: Vector3, v_type: int) -> void:
+	if not is_inside_tree() or get_parent() == null:
+		return
+
+	var particles = CPUParticles3D.new()
+	particles.name = "BreakParticles_%d" % Time.get_ticks_msec()
+	particles.position = pos + Vector3(0.5, 0.5, 0.5)
+	particles.emitting = true
+	particles.one_shot = true
+	particles.explosiveness = 1.0
+	particles.lifetime = 0.45
+	particles.amount = 12
+
+	# 0.12m 迷你方块碎块
+	var p_mesh = BoxMesh.new()
+	p_mesh.size = Vector3(0.14, 0.14, 0.14)
+	
+	var mat = StandardMaterial3D.new()
+	mat.shading_mode = StandardMaterial3D.SHADING_MODE_UNSHADED
+	var v_col = VoxelTypes.get_palette().get(v_type, Color(0.65, 0.65, 0.65, 1.0))
+	mat.albedo_color = v_col
+	p_mesh.material = mat
+	particles.mesh = p_mesh
+
+	# 物理初速度与重力加速度
+	particles.direction = Vector3.UP
+	particles.spread = 180.0
+	particles.initial_velocity_min = 2.0
+	particles.initial_velocity_max = 4.2
+	particles.gravity = Vector3(0, -12.0, 0)
+
+	get_parent().add_child(particles)
+	var timer = get_tree().create_timer(0.5)
+	timer.timeout.connect(particles.queue_free)
+
+
+## 检查放置位置是否与玩家自身物理胶囊体发生穿插（防止将方块放置在自己脚下导致卡死）
+func can_place_at(place_pos: Vector3i) -> bool:
+	if flying:
+		return true
+	var p_min = global_position - Vector3(0.45, 1.0, 0.45)
+	var p_max = global_position + Vector3(0.45, 1.0, 0.45)
+	var b_min = Vector3(place_pos)
+	var b_max = Vector3(place_pos) + Vector3.ONE
+
+	var overlap = (
+		p_min.x < b_max.x and p_max.x > b_min.x and
+		p_min.y < b_max.y and p_max.y > b_min.y and
+		p_min.z < b_max.z and p_max.z > b_min.z
+	)
+	return not overlap
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventMouseMotion:
 		if Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
@@ -65,23 +313,16 @@ func _unhandled_input(event: InputEvent) -> void:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 			return
 
-		# 挖掘与放置判定
-		if event.button_index == MOUSE_BUTTON_LEFT or event.button_index == MOUSE_BUTTON_RIGHT:
-			var cam_forward = -eye_camera.global_transform.basis.z.normalized()
-			var hit = raycast_voxel(eye_camera.global_position, cam_forward, 8.0)
-			if hit.get("hit", false):
-				var hit_pos: Vector3i = hit["position"]
-				var hit_norm: Vector3i = hit["normal"]
-				if event.button_index == MOUSE_BUTTON_LEFT:
-					# 鼠标左键：挖掘/破坏选中的体素
-					if chunk_manager != null:
-						chunk_manager.remove_voxel(hit_pos)
-				elif event.button_index == MOUSE_BUTTON_RIGHT:
-					# 鼠标右键：在选中体素的表面依附放置当前手持选中的体素
-					var place_pos = hit_pos + hit_norm
+		# 鼠标右键：单次依附放置当前手持选中的体素
+		if event.button_index == MOUSE_BUTTON_RIGHT:
+			if current_hit.get("hit", false):
+				var hit_pos: Vector3i = current_hit["position"]
+				var hit_norm: Vector3i = current_hit["normal"]
+				var place_pos = hit_pos + hit_norm
+				
+				if can_place_at(place_pos) and chunk_manager != null:
 					var place_voxel_id: int = hotbar.get_selected_voxel() if hotbar != null else VoxelTypes.Type.GRASS
-					if chunk_manager != null:
-						chunk_manager.add_voxel(place_pos, place_voxel_id)
+					chunk_manager.add_voxel(place_pos, place_voxel_id)
 
 
 ## 3D DDA (Amanatides-Woo) 极速射线检测（亚微秒级命中判定）
@@ -149,3 +390,32 @@ func raycast_voxel(origin: Vector3, dir: Vector3, max_dist: float = 8.0) -> Dict
 				normal = Vector3i(0, 0, -step_z)
 
 	return {"hit": false}
+
+
+## 构建标准 1x1x1 单位立方体 12 边 3D 细线框网格
+static func _create_wireframe_cube_mesh(size: float = 1.004) -> ArrayMesh:
+	var h = size * 0.5
+	var vertices: PackedVector3Array = [
+		# 底部 4 边
+		Vector3(-h, -h, -h), Vector3(h, -h, -h),
+		Vector3(h, -h, -h), Vector3(h, -h, h),
+		Vector3(h, -h, h), Vector3(-h, -h, h),
+		Vector3(-h, -h, h), Vector3(-h, -h, -h),
+		# 顶部 4 边
+		Vector3(-h, h, -h), Vector3(h, h, -h),
+		Vector3(h, h, -h), Vector3(h, h, h),
+		Vector3(h, h, h), Vector3(-h, h, h),
+		Vector3(-h, h, h), Vector3(-h, h, -h),
+		# 4 根垂直立柱边
+		Vector3(-h, -h, -h), Vector3(-h, h, -h),
+		Vector3(h, -h, -h), Vector3(h, h, -h),
+		Vector3(h, -h, h), Vector3(h, h, h),
+		Vector3(-h, -h, h), Vector3(-h, h, h)
+	]
+	var arrays = []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	
+	var mesh = ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_LINES, arrays)
+	return mesh
