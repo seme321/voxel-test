@@ -1,9 +1,9 @@
 class_name VoxelPhysicsEngine extends Node
 
-## Caelix 风格稀疏动态体素物理引擎 (VoxelPhysicsEngine)
+## Caelix 风格高并发稀疏动态体素物理引擎 (VoxelPhysicsEngine)
 ## 整合三大物理体系：
 ## 1. 稀疏重力落沙与 45° 休止角滑坡（自然下落计时与雪崩连锁）
-## 2. 水体流体元胞自动机（垂直跌落瀑布、横向水平扩散寻洼、沙水密度沉降置换）
+## 2. 水体流体元胞自动机（瀑布倾泻、悬崖优先溢流、平地受控水压漫延与静止沉睡）
 ## 3. 悬空结构连通分量承重分析与原生 3D 刚体碎片崩塌（Teardown 风格断柱断桥粉碎坠落）
 ## 无活跃动态体素时 CPU 耗时为严格的 0.00ms
 
@@ -22,14 +22,14 @@ class_name VoxelPhysicsEngine extends Node
 @export var max_debris_size: int = 100               # 刚体碎片最大体素量（超过则判定为连通主大陆，不崩塌）
 
 @export_group("Performance Limits")
-@export var max_active_steps_per_frame: int = 64     # 单帧物理步进上限保护
+@export var max_active_steps_per_frame: int = 48     # 单帧物理步进上限保护
 
 var chunk_manager: ChunkManager = null
 
 # Vector3i -> Dictionary { "type": int, "timer": float }
 var active_falling_voxels: Dictionary = {}
 
-# Vector3i -> Dictionary { "type": int, "timer": float }
+# Vector3i -> Dictionary { "type": int, "timer": float, "energy": int, "from_dir": Vector3i }
 var active_fluids: Dictionary = {}
 
 var _is_internal_op: bool = false
@@ -76,18 +76,22 @@ func activate_voxel(pos: Vector3i, delay: float = -1.0) -> void:
 
 
 ## 唤醒流体方块（水体等）
-func activate_fluid(pos: Vector3i, delay: float = -1.0) -> void:
+func activate_fluid(pos: Vector3i, delay: float = -1.0, energy: int = 3) -> void:
 	if chunk_manager == null or pos.y <= 0 or pos.y >= chunk_manager.max_height:
 		return
-	if active_fluids.has(pos):
-		return
 	var v_type = chunk_manager.get_voxel(pos.x, pos.y, pos.z)
-	if VoxelTypes.is_fluid(v_type):
-		var actual_delay = delay if delay >= 0.0 else initial_wake_delay
-		active_fluids[pos] = {
-			"type": v_type,
-			"timer": actual_delay
-		}
+	if not VoxelTypes.is_fluid(v_type):
+		return
+	if active_fluids.has(pos):
+		active_fluids[pos]["energy"] = maxi(active_fluids[pos].get("energy", 0), energy)
+		return
+	var actual_delay = delay if delay >= 0.0 else initial_wake_delay
+	active_fluids[pos] = {
+		"type": v_type,
+		"timer": actual_delay,
+		"energy": energy,
+		"from_dir": Vector3i.ZERO
+	}
 
 
 ## 挖掘/破坏方块时的级联物理波纹与承重断裂检测
@@ -100,12 +104,12 @@ func notify_voxel_removed(pos: Vector3i) -> void:
 	for dir in HORIZONTAL_DIRECTIONS:
 		activate_voxel(pos + dir + Vector3i(0, 1, 0), initial_wake_delay * 1.5)
 
-	# 2. 唤醒周围 6 向临近的流体（水流向被挖掘出的空腔涌入）
+	# 2. 唤醒周围 6 向临近的流体（赋予能量，使其能够流向空缺）
 	for dir in ALL_6_DIRECTIONS:
 		var nb = pos + dir
 		var nb_type = chunk_manager.get_voxel(nb.x, nb.y, nb.z)
 		if VoxelTypes.is_fluid(nb_type):
-			activate_fluid(nb, initial_wake_delay)
+			activate_fluid(nb, initial_wake_delay, 3)
 
 	# 3. 结构力学连通分量承重分析（浮空悬崖/被截断桥梁转化为 3D 刚体碎片崩塌）
 	if enable_structural_integrity:
@@ -125,15 +129,17 @@ func notify_voxel_placed(pos: Vector3i, type: int) -> void:
 	elif VoxelTypes.is_fluid(type):
 		active_fluids[pos] = {
 			"type": type,
-			"timer": initial_wake_delay
+			"timer": initial_wake_delay,
+			"energy": 3,
+			"from_dir": Vector3i.ZERO
 		}
 
-	# 放置方块时，唤醒周围流体重新寻路
+	# 仅唤醒上方或侧向受重力影响的流体
 	for dir in ALL_6_DIRECTIONS:
 		var nb = pos + dir
 		var nb_type = chunk_manager.get_voxel(nb.x, nb.y, nb.z)
 		if VoxelTypes.is_fluid(nb_type):
-			activate_fluid(nb, initial_wake_delay)
+			activate_fluid(nb, initial_wake_delay, 3)
 
 
 # -----------------------------------------------------------------------------
@@ -202,7 +208,7 @@ func _process_falling_sand(delta: float, current_steps: int) -> int:
 			continue
 		elif VoxelTypes.is_fluid(below_voxel):
 			move_voxel_swap(pos, below_pos, v_type, below_voxel)
-			activate_fluid(pos, initial_wake_delay) # 被推上去的水开始流动
+			activate_fluid(pos, initial_wake_delay, 3) # 被推上去的水开始流动
 			next_active[below_pos] = {"type": v_type, "timer": vertical_fall_delay * 1.5}
 			activate_voxel(pos + Vector3i(0, 1, 0), vertical_fall_delay * 0.8)
 			steps += 1
@@ -224,7 +230,7 @@ func _process_falling_sand(delta: float, current_steps: int) -> int:
 			   (diag_v == VoxelTypes.Type.AIR or VoxelTypes.is_fluid(diag_v)):
 				if VoxelTypes.is_fluid(diag_v):
 					move_voxel_swap(pos, diag_pos, v_type, diag_v)
-					activate_fluid(pos, initial_wake_delay)
+					activate_fluid(pos, initial_wake_delay, 3)
 				else:
 					move_voxel(pos, diag_pos, v_type)
 				next_active[diag_pos] = {"type": v_type, "timer": slope_slide_delay}
@@ -238,12 +244,12 @@ func _process_falling_sand(delta: float, current_steps: int) -> int:
 
 
 # -----------------------------------------------------------------------------
-# 体系 2：水体流体元胞自动机 (Water Fluid Cellular Automata)
+# 体系 2：水体流体元胞自动机 (Water Fluid Cellular Automata - Optimized)
 # -----------------------------------------------------------------------------
 
 func _process_fluids(delta: float, current_steps: int) -> int:
 	var positions: Array = active_fluids.keys()
-	# 按 Y 坐标由小到大排序（底层水先流动，避免悬空水流断裂）
+	# 底层水先流动，避免悬空水流断裂
 	positions.sort_custom(func(a: Vector3i, b: Vector3i): return a.y < b.y)
 
 	var next_fluids: Dictionary = {}
@@ -256,6 +262,8 @@ func _process_fluids(delta: float, current_steps: int) -> int:
 		var data = active_fluids[pos]
 		var v_type = data["type"]
 		var timer = data["timer"] - delta
+		var energy: int = data.get("energy", 3)
+		var from_dir: Vector3i = data.get("from_dir", Vector3i.ZERO)
 
 		if chunk_manager.get_voxel(pos.x, pos.y, pos.z) != v_type or pos.y <= 0:
 			continue
@@ -276,23 +284,35 @@ func _process_fluids(delta: float, current_steps: int) -> int:
 		# 1. 垂直跌落 (Gravity Waterfall)
 		if below_voxel == VoxelTypes.Type.AIR:
 			move_voxel(pos, below_pos, v_type)
-			next_fluids[below_pos] = {"type": v_type, "timer": fluid_fall_delay}
-			# 唤醒上方水体形成连续水柱，并唤醒周围水体涌向缺口
-			activate_fluid(pos + Vector3i(0, 1, 0), fluid_fall_delay * 0.8)
+			next_fluids[below_pos] = {
+				"type": v_type,
+				"timer": fluid_fall_delay,
+				"energy": 3,
+				"from_dir": Vector3i.DOWN
+			}
+			# 仅当正上方确实是水体时才唤醒形成水柱
+			var above_pos = pos + Vector3i(0, 1, 0)
+			if chunk_manager.get_voxel(above_pos.x, above_pos.y, above_pos.z) == v_type:
+				activate_fluid(above_pos, fluid_fall_delay * 0.8, 3)
+			# 仅唤醒周围切实存在的水体方块涌向缺口
 			for dir in HORIZONTAL_DIRECTIONS:
-				activate_fluid(pos + dir, fluid_fall_delay)
+				var side = pos + dir
+				if chunk_manager.get_voxel(side.x, side.y, side.z) == v_type:
+					activate_fluid(side, fluid_fall_delay, 3)
 			steps += 1
 			continue
 
-		# 2. 横向寻找悬崖边缘与水平扩散 (Lateral Flow & Drain Seeking)
+		# 2. 检查 4 个水平方向的悬崖边缘与平坦扩散空间
 		var drop_dirs: Array[Vector3i] = []
 		var flat_dirs: Array[Vector3i] = []
 
 		for dir in HORIZONTAL_DIRECTIONS:
+			# 防止反向震荡互挤
+			if dir == -from_dir and from_dir != Vector3i.ZERO:
+				continue
 			var side_pos = pos + dir
 			var side_v = chunk_manager.get_voxel(side_pos.x, side_pos.y, side_pos.z)
 			if side_v == VoxelTypes.Type.AIR:
-				# 检查侧面下方是否为空（是否为悬崖跌落边缘）
 				var side_below = side_pos + Vector3i(0, -1, 0)
 				var side_below_v = chunk_manager.get_voxel(side_below.x, side_below.y, side_below.z)
 				if side_below_v == VoxelTypes.Type.AIR:
@@ -300,31 +320,48 @@ func _process_fluids(delta: float, current_steps: int) -> int:
 				else:
 					flat_dirs.append(dir)
 
-		# 优先级 A：向悬崖/深坑跌落边缘奔流（瀑布飞流直下）
+		# 优先级 A：向悬崖/深坑跌落边缘奔流（瀑布倾泻）
 		if not drop_dirs.is_empty():
 			drop_dirs.shuffle()
 			var target_pos = pos + drop_dirs[0]
 			move_voxel(pos, target_pos, v_type)
-			next_fluids[target_pos] = {"type": v_type, "timer": fluid_fall_delay}
-			activate_fluid(pos + Vector3i(0, 1, 0), fluid_fall_delay * 0.8)
+			next_fluids[target_pos] = {
+				"type": v_type,
+				"timer": fluid_fall_delay,
+				"energy": 3,
+				"from_dir": drop_dirs[0]
+			}
+			var above_pos = pos + Vector3i(0, 1, 0)
+			if chunk_manager.get_voxel(above_pos.x, above_pos.y, above_pos.z) == v_type:
+				activate_fluid(above_pos, fluid_fall_delay * 0.8, 3)
 			for dir in HORIZONTAL_DIRECTIONS:
-				activate_fluid(pos + dir, fluid_flow_delay)
+				var side = pos + dir
+				if chunk_manager.get_voxel(side.x, side.y, side.z) == v_type:
+					activate_fluid(side, fluid_flow_delay, 3)
 			steps += 1
 			continue
 
-		# 优先级 B：平地向外舒缓扩散填平洼地
-		if not flat_dirs.is_empty():
+		# 优先级 B：平地向外舒缓扩散填平洼地（受水压或残余动能驱动，耗尽后稳定沉睡）
+		var has_water_pressure = (chunk_manager.get_voxel(pos.x, pos.y + 1, pos.z) == v_type)
+		if (has_water_pressure or energy > 0) and not flat_dirs.is_empty():
 			flat_dirs.shuffle()
-			var target_pos = pos + flat_dirs[0]
+			var chosen_dir = flat_dirs[0]
+			var target_pos = pos + chosen_dir
 			move_voxel(pos, target_pos, v_type)
-			next_fluids[target_pos] = {"type": v_type, "timer": fluid_flow_delay}
-			activate_fluid(pos + Vector3i(0, 1, 0), fluid_flow_delay * 0.8)
-			for dir in HORIZONTAL_DIRECTIONS:
-				activate_fluid(pos + dir, fluid_flow_delay * 1.2)
+			var new_energy = 3 if has_water_pressure else (energy - 1)
+			next_fluids[target_pos] = {
+				"type": v_type,
+				"timer": fluid_flow_delay,
+				"energy": new_energy,
+				"from_dir": chosen_dir
+			}
+			if has_water_pressure:
+				activate_fluid(pos + Vector3i(0, 1, 0), fluid_fall_delay, 3)
 			steps += 1
 			continue
 
-		# 3. 既无法跌落也无处可流，水体填平池底进入静止沉睡态 (Settled)
+		# 3. 既无法跌落也无水压且动能耗尽，水体填平沉淀，进入沉睡状态 (Settled)
+		# 不再加入 next_fluids，活跃流体数量归零，CPU 消耗归零！
 
 	active_fluids = next_fluids
 	return steps

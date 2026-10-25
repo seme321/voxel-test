@@ -50,6 +50,8 @@ var local_collider: StaticBody3D = null
 var local_collision_shape: CollisionShape3D = null
 var local_concave_shape: ConcavePolygonShape3D = null
 var last_collider_center: Vector3i = Vector3i(999999, 999999, 999999)
+var local_collider_dirty: bool = false
+var dirty_rt_sectors: Dictionary[Vector3i, Chunk] = {}
 var voxel_physics: VoxelPhysicsEngine = null
 
 
@@ -308,6 +310,7 @@ func _process(_delta: float) -> void:
 
 	# 硬件光追逐帧渲染调度
 	if use_hardware_raytracer and raytracer != null and player != null:
+		flush_dirty_rt_sectors()
 		var cam = player.eye_camera
 		if cam != null:
 			raytracer.render_frame(cam.global_transform, cam.fov)
@@ -322,6 +325,23 @@ func _process(_delta: float) -> void:
 					player.global_position.x, player.global_position.y, player.global_position.z,
 					str(player.flying)
 				]
+
+
+## 延迟扇区批量刷新：将单帧内上百个微小体素变更（落沙、水流）合并为单次 BLAS 重建与物理更新，彻底杜绝 GC 暴涨与 GPU 管线等待
+func flush_dirty_rt_sectors() -> void:
+	if not dirty_rt_sectors.is_empty():
+		for coord in dirty_rt_sectors.keys():
+			var chunk = dirty_rt_sectors[coord]
+			if chunk != null and is_instance_valid(chunk) and chunk.chunk_data != null:
+				var rt_data = chunk.chunk_data.GetRayTracingData()
+				raytracer.upload_sector_aabbs(coord, rt_data[0])
+				raytracer.upload_sector_bricks(coord, rt_data[1])
+		dirty_rt_sectors.clear()
+
+	if local_collider_dirty:
+		local_collider_dirty = false
+		update_local_collider(true)
+
 
 
 func find_player() -> void:
@@ -609,10 +629,10 @@ func add_voxel(pos: Vector3i, voxel: int = 1) -> void:
 			patched = raytracer.patch_sector_brick(coord, b_idx, b_bytes)
 
 		if not patched:
-			var rt_data = chunk.chunk_data.GetRayTracingData()
-			raytracer.upload_sector_aabbs(coord, rt_data[0])
-			raytracer.upload_sector_bricks(coord, rt_data[1])
-		update_local_collider(true)
+			dirty_rt_sectors[coord] = chunk
+
+		if VoxelTypes.is_solid(voxel):
+			local_collider_dirty = true
 	else:
 		check_and_notify_neighbors(chunk)
 
@@ -637,7 +657,7 @@ func remove_voxel(pos: Vector3i) -> void:
 		empty_chunks[chunk.position] = true
 		remove_chunk(chunk.position)
 		if use_hardware_raytracer:
-			update_local_collider(true)
+			local_collider_dirty = true
 		return
 
 	var solid_after = chunk.chunk_data.IsBrickSolid(b_idx)
@@ -650,10 +670,9 @@ func remove_voxel(pos: Vector3i) -> void:
 			patched = raytracer.patch_sector_brick(coord, b_idx, b_bytes)
 
 		if not patched:
-			var rt_data = chunk.chunk_data.GetRayTracingData()
-			raytracer.upload_sector_aabbs(coord, rt_data[0])
-			raytracer.upload_sector_bricks(coord, rt_data[1])
-		update_local_collider(true)
+			dirty_rt_sectors[coord] = chunk
+
+		local_collider_dirty = true
 	else:
 		check_and_notify_neighbors(chunk)
 
