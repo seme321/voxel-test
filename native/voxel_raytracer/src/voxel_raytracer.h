@@ -9,6 +9,7 @@
 #include <godot_cpp/variant/string.hpp>
 
 #include "vulkan/vulkan_context.h"
+#include "vulkan/vulkan_rt_pipeline.h"
 
 #include <memory>
 #include <string>
@@ -29,6 +30,7 @@ private:
     String gpu_device_name = "Detecting...";
 
     std::unique_ptr<VulkanContext> vk_context;
+    std::unique_ptr<VulkanRayTracingPipeline> rt_pipeline;
 
     Ref<Image> output_image;
     Ref<ImageTexture> output_texture;

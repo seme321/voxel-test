@@ -1,4 +1,5 @@
 #include "voxel_raytracer.h"
+#include "vulkan/embedded_shaders.h"
 
 #include <godot_cpp/core/class_db.hpp>
 #include <godot_cpp/variant/utility_functions.hpp>
@@ -43,6 +44,10 @@ VoxelRayTracer::~VoxelRayTracer() {
     active_sectors.clear();
     output_image.unref();
     output_texture.unref();
+    if (rt_pipeline) {
+        rt_pipeline->cleanup();
+        rt_pipeline.reset();
+    }
     if (vk_context) {
         vk_context->cleanup();
         vk_context.reset();
@@ -86,6 +91,19 @@ bool VoxelRayTracer::init_raytracer(int p_width, int p_height) {
         }
         rtx_available = vk_context->rtx_supported;
         gpu_device_name = vk_context->device_name.c_str();
+    }
+
+    // Initialize Vulkan Hardware Ray Tracing Pipeline & SBT
+    if (!rt_pipeline) {
+        rt_pipeline = std::make_unique<VulkanRayTracingPipeline>();
+        if (!rt_pipeline->init(vk_context.get(),
+                               Shaders::kRayGenSpv, Shaders::kRayGenSpv_size,
+                               Shaders::kMissSpv, Shaders::kMissSpv_size,
+                               Shaders::kIntersectionSpv, Shaders::kIntersectionSpv_size,
+                               Shaders::kClosestHitSpv, Shaders::kClosestHitSpv_size)) {
+            UtilityFunctions::printerr("[VoxelRayTracer] Failed to compile Ray Tracing Pipeline & SBT!");
+            return false;
+        }
     }
 
     // Create presentation texture buffer

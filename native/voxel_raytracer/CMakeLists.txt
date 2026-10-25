@@ -14,12 +14,15 @@ set(SOURCES
     src/register_types.cpp
     src/voxel_raytracer.cpp
     src/vulkan/vulkan_context.cpp
+    src/vulkan/vulkan_rt_pipeline.cpp
 )
 
 set(HEADERS
     src/register_types.h
     src/voxel_raytracer.h
     src/vulkan/vulkan_context.h
+    src/vulkan/vulkan_rt_pipeline.h
+    src/vulkan/embedded_shaders.h
 )
 
 add_library(${PROJECT_NAME} SHARED ${SOURCES} ${HEADERS})
