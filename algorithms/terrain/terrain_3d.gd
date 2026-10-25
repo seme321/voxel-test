@@ -61,11 +61,24 @@ func generate_data(position: Vector3, biome_noise: Noise, chunk_data) -> void:
 				if not has_voxel:
 					continue
 				
-				var height_factor: float = gy * inv_max_height
-				var biome = base_biome
-				if height_factor >= 0.22:
-					biome = VoxelTypes.Type.STONE
-					if is_snow_candidate and height_factor > 0.4:
+				var is_surface: bool = (gy >= safe_max_height - 1.0) or ((1.0 - ((gy + 1.0) * inv_max_height) * 2.0 + (fast_noise.get_noise_3d(gx, gy + 1.0, gz) if fast_noise != null else 0.0) * noise_weight) <= surface_threshold)
+				var biome = VoxelTypes.Type.STONE
+				if is_surface:
+					if gy >= 88.0 and is_snow_candidate:
 						biome = VoxelTypes.Type.SNOW
+					elif gy >= 76.0:
+						biome = VoxelTypes.Type.STONE
+					elif base_biome == VoxelTypes.Type.SAND or gy <= 44.0:
+						biome = VoxelTypes.Type.SAND
+					else:
+						biome = VoxelTypes.Type.GRASS
+				else:
+					var is_subsurface: bool = (1.0 - ((gy + 3.0) * inv_max_height) * 2.0 + (fast_noise.get_noise_3d(gx, gy + 3.0, gz) if fast_noise != null else 0.0) * noise_weight) <= surface_threshold
+					if is_subsurface and base_biome == VoxelTypes.Type.GRASS and gy < 76.0 and gy > 44.0:
+						biome = VoxelTypes.Type.DIRT
+					elif is_subsurface and (base_biome == VoxelTypes.Type.SAND or gy <= 48.0):
+						biome = VoxelTypes.Type.SAND
+					else:
+						biome = VoxelTypes.Type.STONE
 				
 				chunk_data.AddVoxel(x, y, z, biome)

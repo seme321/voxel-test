@@ -50,9 +50,14 @@ var local_collider: StaticBody3D = null
 var local_collision_shape: CollisionShape3D = null
 var local_concave_shape: ConcavePolygonShape3D = null
 var last_collider_center: Vector3i = Vector3i(999999, 999999, 999999)
+var voxel_physics: VoxelPhysicsEngine = null
 
 
 func _ready() -> void:
+	voxel_physics = VoxelPhysicsEngine.new()
+	voxel_physics.name = "VoxelPhysicsEngine"
+	add_child(voxel_physics)
+
 	terrain_algorithm.max_height = max_height
 
 	# 同步并补全 VoxelTypes 全局模块提供的色盘，确保全方块光栅化与光追色彩一致
@@ -176,6 +181,25 @@ func is_voxel_solid(gx: int, gy: int, gz: int) -> bool:
 	var ly = gy - chunk_origin.y
 	var lz = gz - chunk_origin.z
 	return chunk.chunk_data.IsSolid(lx, ly, lz)
+
+
+func get_voxel(gx: int, gy: int, gz: int) -> int:
+	if gy < 0 or gy >= max_height:
+		return VoxelTypes.Type.AIR
+	var chunk_origin = Vector3i(
+		floori(float(gx) / chunk_size) * chunk_size,
+		floori(float(gy) / chunk_size) * chunk_size,
+		floori(float(gz) / chunk_size) * chunk_size
+	)
+	if not chunks.has(chunk_origin):
+		return VoxelTypes.Type.AIR
+	var chunk = chunks[chunk_origin]
+	if chunk == null or chunk.chunk_data == null:
+		return VoxelTypes.Type.AIR
+	var lx = gx - chunk_origin.x
+	var ly = gy - chunk_origin.y
+	var lz = gz - chunk_origin.z
+	return int(chunk.chunk_data.GetVoxel(lx, ly, lz))
 
 
 ## 动态局部物理探针：仅在玩家周围 5x6x5 体素内构建物理碰撞网格（耗时 < 0.05ms，彻底根治全图烘焙卡顿）
@@ -579,6 +603,9 @@ func add_voxel(pos: Vector3i, voxel: int = 1) -> void:
 	else:
 		check_and_notify_neighbors(chunk)
 
+	if voxel_physics != null:
+		voxel_physics.notify_voxel_placed(pos, voxel)
+
 
 func remove_voxel(pos: Vector3i) -> void:
 	var chunk = get_chunk(pos)
@@ -589,6 +616,9 @@ func remove_voxel(pos: Vector3i) -> void:
 	var solid_before = chunk.chunk_data.IsBrickSolid(b_idx)
 
 	chunk.remove_voxel(local_position)
+	
+	if voxel_physics != null:
+		voxel_physics.notify_voxel_removed(pos)
 	
 	if chunk.chunk_data.IsEmpty():
 		empty_chunks[chunk.position] = true

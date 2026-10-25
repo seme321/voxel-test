@@ -591,13 +591,44 @@ public partial class ChunkData : Resource
 								if (!hasVoxel) continue;
 
 								float heightFactor = gy * invMaxHeight;
-								Voxel voxel = baseBiome;
-								if (heightFactor >= 0.22f)
+								Voxel voxel;
+
+								// 判断是否为地表暴露层（顶部无遮挡）
+								bool isSurface = (gy >= maxHeight - 1) || ((1.0f - ((gy + 1) * invMaxHeight) * 2.0f + terrainNoise.GetNoise3D(gx, gy + 1, gz) * noiseWeight) <= surfaceThreshold);
+								if (isSurface)
 								{
-									voxel = Voxel.MOUNTAIN;
-									if (isSnowCandidate && heightFactor > 0.4f)
+									if (gy >= 88 && isSnowCandidate)
 									{
 										voxel = Voxel.SNOW;
+									}
+									else if (gy >= 76)
+									{
+										voxel = Voxel.MOUNTAIN;
+									}
+									else if (baseBiome == Voxel.SAND || gy <= 44)
+									{
+										voxel = Voxel.SAND;
+									}
+									else
+									{
+										voxel = Voxel.GRASS;
+									}
+								}
+								else
+								{
+									// 次表层 (1~3 格深度)：草地下为泥土，沙滩下为细沙，深部为基岩
+									bool isSubsurface = (1.0f - ((gy + 3) * invMaxHeight) * 2.0f + terrainNoise.GetNoise3D(gx, gy + 3, gz) * noiseWeight) <= surfaceThreshold;
+									if (isSubsurface && baseBiome == Voxel.GRASS && gy < 76 && gy > 44)
+									{
+										voxel = Voxel.DIRT;
+									}
+									else if (isSubsurface && (baseBiome == Voxel.SAND || gy <= 48))
+									{
+										voxel = Voxel.SAND;
+									}
+									else
+									{
+										voxel = Voxel.MOUNTAIN; // 深层基岩
 									}
 								}
 
