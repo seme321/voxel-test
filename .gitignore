@@ -3,11 +3,20 @@
 /android/
 
 # .NET / Visual Studio ignores
-[Bb]in/
+[Bb]in/*
+![Bb]in/*.gdextension
 [Oo]bj/
 .vs/
 *.user
 *.userprefs
+
+# Native C++ build & external submodule ignores
+native/**/build/
+native/**/godot-cpp/
+native/**/vulkan-headers/
+*.exp
+*.lib
+*.pdb
 
 # OS / Editor files
 .DS_Store
