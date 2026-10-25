@@ -5,13 +5,20 @@ class_name ChunkManager extends Node
 @export var meshing_algorithm: MeshingAlgorithm
 @export var terrain_algorithm: TerrainAlgorithm
 
+@export_group("Caelix Hardware Raytracing (Route 3B)")
+@export var use_hardware_raytracer: bool = true
+@export var rt_render_width: int = 1280
+@export var rt_render_height: int = 720
+@export var enable_upscaling_filter: bool = true
+@export var show_rt_hud: bool = true
+
 @export_group("Dynamic Streaming")
 @export var player: Node3D
 @export var view_distance: int = 2 # 水平视距半径（以 128^3 Sector 为单位，2 表示 5x5 区域，覆盖 640x640 米）
 @export var unload_distance: int = 3 # 卸载距离（3 表示 7x7 之外卸载，覆盖近 1 公里）
-@export var max_ms_per_frame: float = 6.0 # 每帧最多耗时（毫秒），超预算立即让出渲染时间，保住 60+ FPS
-@export var max_chunks_per_frame: int = 1 # 单帧上限保护，避免瞬间大量节点挂载
-@export var initial_immediate_radius: int = 0 # 启动时立即同步生成玩家所在的 1 个 128^3 核心 Sector (覆盖 128x128 米，秒进且脚下有地)
+@export var max_ms_per_frame: float = 6.0 # 每帧最多耗时（毫秒）
+@export var max_chunks_per_frame: int = 1 # 单帧上限保护
+@export var initial_immediate_radius: int = 0 # 启动时立即同步生成玩家脚下 1 个核心 Sector
 @export var max_height: int = 128 # 世界垂直高度上限 (128^3)
 
 const NEIGHBOR_OFFSETS: Array[Vector3i] = [
@@ -25,12 +32,18 @@ const NEIGHBOR_OFFSETS: Array[Vector3i] = [
 const OPPOSITE_DIRECTIONS: Array[int] = [1, 0, 3, 2, 5, 4]
 
 var chunk_class = preload("uid://dh84jil6lln54")
-var chunks: Dictionary[Vector3i, Chunk] = {} # world_pos -> Chunk 实例
-var empty_chunks: Dictionary[Vector3i, bool] = {} # world_pos -> true（标记无体素的纯空气区块，避免反复生成）
+var chunks: Dictionary[Vector3i, Chunk] = {} # world_pos -> Chunk 实例 (保留用于数据与碰撞查询)
+var empty_chunks: Dictionary[Vector3i, bool] = {} # world_pos -> true（标记无体素的纯空气区块）
 var load_queue: Array[Vector3i] = [] # 待生成的区块网格坐标队列
 var queue_set: Dictionary[Vector3i, bool] = {} # chunk_coord -> true（快速查重）
 var in_progress_set: Dictionary[Vector3i, bool] = {} # chunk_coord -> true（正在后台异步生成的区块）
 var last_player_chunk: Vector3i = Vector3i(999999, 999999, 999999)
+
+# Caelix 硬件光追组件
+var raytracer = null
+var rt_canvas_layer: CanvasLayer = null
+var rt_texture_rect: TextureRect = null
+var rt_hud_label: Label = null
 
 
 func _ready() -> void:
@@ -42,12 +55,76 @@ func _ready() -> void:
 	if player != null:
 		start_coord = world_to_chunk_coord(player.global_position)
 	last_player_chunk = start_coord
-	
-	# 1. 立即同步生成角色脚下核心区块，瞬间进入场景且脚下有地
+
+	# 1. 初始化 Caelix Vulkan 硬件光追模块与全屏呈现
+	if use_hardware_raytracer and ClassDB.class_exists("VoxelRayTracer"):
+		raytracer = ClassDB.instantiate("VoxelRayTracer")
+		add_child(raytracer)
+		var ok = raytracer.init_raytracer(rt_render_width, rt_render_height)
+		if ok:
+			setup_raytracer_display()
+			print("[ChunkManager] Caelix Hardware Raytracing Pipeline Activated on: ", raytracer.get_gpu_name())
+		else:
+			printerr("[ChunkManager] Failed to init VoxelRayTracer! Falling back to rasterization.")
+			use_hardware_raytracer = false
+
+	# 2. 生成角色脚下核心区块
 	init_immediate_chunks(start_coord)
-	
-	# 2. 将周围 view_distance 内的其余区块加入后台平滑加载队列
+
+	# 3. 将周围 view_distance 内的其余区块加入后台平滑流式加载队列
 	update_chunks_around_player(start_coord)
+
+
+func setup_raytracer_display() -> void:
+	rt_canvas_layer = CanvasLayer.new()
+	rt_canvas_layer.layer = -10 # 置于最底层，不遮挡任何后续 UI
+	
+	rt_texture_rect = TextureRect.new()
+	rt_texture_rect.name = "RaytracedViewport"
+	rt_texture_rect.texture = raytracer.get_output_texture()
+	rt_texture_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	rt_texture_rect.anchor_right = 1.0
+	rt_texture_rect.anchor_bottom = 1.0
+	if enable_upscaling_filter:
+		rt_texture_rect.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+	rt_canvas_layer.add_child(rt_texture_rect)
+
+	# 准星与状态 HUD
+	if show_rt_hud:
+		var hud_layer = CanvasLayer.new()
+		hud_layer.layer = 10
+		
+		# 准星 Crosshair
+		var crosshair = Label.new()
+		crosshair.text = "+"
+		crosshair.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		crosshair.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		crosshair.anchor_left = 0.5
+		crosshair.anchor_top = 0.5
+		crosshair.anchor_right = 0.5
+		crosshair.anchor_bottom = 0.5
+		crosshair.offset_left = -20
+		crosshair.offset_top = -20
+		crosshair.offset_right = 20
+		crosshair.offset_bottom = 20
+		crosshair.add_theme_font_size_override("font_size", 24)
+		crosshair.add_theme_color_override("font_color", Color(1, 1, 1, 0.85))
+		hud_layer.add_child(crosshair)
+
+		# 状态信息
+		rt_hud_label = Label.new()
+		rt_hud_label.name = "RTHud"
+		rt_hud_label.offset_left = 16
+		rt_hud_label.offset_top = 16
+		rt_hud_label.offset_right = 800
+		rt_hud_label.offset_bottom = 120
+		rt_hud_label.add_theme_font_size_override("font_size", 14)
+		rt_hud_label.add_theme_color_override("font_color", Color(0.2, 0.9, 0.5, 0.95))
+		hud_layer.add_child(rt_hud_label)
+		
+		add_child(hud_layer)
+
+	add_child(rt_canvas_layer)
 
 
 func _process(_delta: float) -> void:
@@ -57,14 +134,30 @@ func _process(_delta: float) -> void:
 			return
 
 	var current_chunk = world_to_chunk_coord(player.global_position)
-	# 当玩家跨越区块边界时触发检测
 	if current_chunk.x != last_player_chunk.x or current_chunk.z != last_player_chunk.z:
 		last_player_chunk = current_chunk
 		update_chunks_around_player(current_chunk)
 		unload_distant_chunks(current_chunk)
 
-	# 持续在后台线程池中平滑消费加载队列
+	# 后台线程池平滑消费加载队列
 	process_load_queue()
+
+	# 硬件光追逐帧渲染调度
+	if use_hardware_raytracer and raytracer != null and player != null:
+		var cam = player.eye_camera
+		if cam != null:
+			raytracer.render_frame(cam.global_transform, cam.fov)
+			if rt_hud_label != null:
+				var fps = Engine.get_frames_per_second()
+				rt_hud_label.text = "[Caelix RT Mode] FPS: %d\nGPU: %s\nActive Sectors: %d | Resolution: %dx%d\nCam Pos: (%.1f, %.1f, %.1f) | Flying: %s" % [
+					fps,
+					raytracer.get_gpu_name(),
+					raytracer.get_active_sector_count(),
+					rt_render_width,
+					rt_render_height,
+					player.global_position.x, player.global_position.y, player.global_position.z,
+					str(player.flying)
+				]
 
 
 func find_player() -> void:
@@ -78,7 +171,7 @@ func find_player() -> void:
 		player = players[0] as Node3D
 
 
-## 启动时立即同步生成近处核心区块
+## 启动时立即同步生成近处核心区块（毫秒级秒进）
 func init_immediate_chunks(center_coord: Vector3i) -> void:
 	var vertical_chunks = maxi(1, ceili(float(max_height) / float(chunk_size)))
 	for dx in range(-initial_immediate_radius, initial_immediate_radius + 1):
@@ -88,7 +181,7 @@ func init_immediate_chunks(center_coord: Vector3i) -> void:
 				generate_chunk_at_sync(coord)
 
 
-## 将角色周围 view_distance 内未生成的区块推入加载队列（优先近处）
+## 将角色周围 view_distance 内未生成的区块推入加载队列
 func update_chunks_around_player(center_coord: Vector3i) -> void:
 	var vertical_chunks = maxi(1, ceili(float(max_height) / float(chunk_size)))
 	var new_coords: Array[Vector3i] = []
@@ -96,7 +189,6 @@ func update_chunks_around_player(center_coord: Vector3i) -> void:
 	
 	for dx in range(-view_distance, view_distance + 1):
 		for dz in range(-view_distance, view_distance + 1):
-			# 圆形视距裁剪，避免方角多余开销
 			if dx * dx + dz * dz > view_dist_sq:
 				continue
 				
@@ -108,7 +200,6 @@ func update_chunks_around_player(center_coord: Vector3i) -> void:
 					queue_set[coord] = true
 
 	load_queue.append_array(new_coords)
-	# 按距离玩家当前水平位置排序，距离近的优先加载
 	load_queue.sort_custom(func(a: Vector3i, b: Vector3i) -> bool:
 		var da = (a.x - center_coord.x) * (a.x - center_coord.x) + (a.z - center_coord.z) * (a.z - center_coord.z)
 		var db = (b.x - center_coord.x) * (b.x - center_coord.x) + (b.z - center_coord.z) * (b.z - center_coord.z)
@@ -116,7 +207,7 @@ func update_chunks_around_player(center_coord: Vector3i) -> void:
 	)
 
 
-## 在后台线程池并行消费生成任务，彻底释放主渲染循环
+## 在后台线程池并行消费生成任务
 func process_load_queue() -> void:
 	if load_queue.is_empty():
 		return
@@ -138,32 +229,53 @@ func dispatch_chunk_task(coord: Vector3i) -> void:
 	var world_pos = coord * chunk_size
 	var chunk = create_chunk(world_pos)
 
-	# 提前关联已就绪的邻居 Sector，以便子区块生成时直接消去接缝面
-	for dir in range(6):
-		var n_coord = coord + NEIGHBOR_OFFSETS[dir]
-		var n_pos = n_coord * chunk_size
-		if chunks.has(n_pos):
-			var n_chunk = chunks[n_pos]
-			chunk.chunk_data.SetNeighbor(dir, n_chunk.chunk_data)
-
 	WorkerThreadPool.add_task(func():
 		var t0 = Time.get_ticks_msec()
 		chunk.generate_data(terrain_algorithm)
 		var t1 = Time.get_ticks_msec()
 
-		if not chunk.chunk_data.IsEmpty():
-			chunk.prepare_sub_chunks_background()
-		var t2 = Time.get_ticks_msec()
-
-		call_deferred("_on_chunk_task_completed", coord, chunk, t1 - t0, t2 - t1)
+		if use_hardware_raytracer:
+			# 【Caelix 硬件光追路线】：极速无 GC 导出 AABB 与 Brick SSBO（~24ms）
+			if not chunk.chunk_data.IsEmpty():
+				var aabb_bytes = chunk.chunk_data.GetRayTracingAabbBytes()
+				var brick_bytes = chunk.chunk_data.GetRayTracingBrickBytes()
+				call_deferred("_on_rt_chunk_task_completed", coord, chunk, aabb_bytes, brick_bytes, t1 - t0)
+			else:
+				call_deferred("_on_rt_chunk_task_completed", coord, chunk, PackedByteArray(), PackedByteArray(), t1 - t0)
+		else:
+			# 【传统光栅化网格路线】
+			if not chunk.chunk_data.IsEmpty():
+				chunk.prepare_sub_chunks_background()
+			var t2 = Time.get_ticks_msec()
+			call_deferred("_on_chunk_task_completed", coord, chunk, t1 - t0, t2 - t1)
 	)
 
 
+## Caelix 硬件光追专属回调：O(1) 瞬间提交 GPU，0 场景树节点膨胀，0 物理死锁！
+func _on_rt_chunk_task_completed(coord: Vector3i, chunk: Chunk, aabb_bytes: PackedByteArray, brick_bytes: PackedByteArray, terrain_ms: int) -> void:
+	in_progress_set.erase(coord)
+	var world_pos = coord * chunk_size
+
+	if aabb_bytes.is_empty() or brick_bytes.is_empty():
+		remove_chunk(chunk.position)
+		empty_chunks[world_pos] = true
+		return
+
+	# 保留 chunk 实例供体素数据快速查询与修改
+	chunks[world_pos] = chunk
+	
+	# 向 RTX 4070 硬件提交 AABBs 构建 BLAS
+	raytracer.upload_sector_aabbs(coord, aabb_bytes)
+	raytracer.upload_sector_bricks(coord, brick_bytes)
+	print("[Sector %s] Done RT Stream: Terrain %d ms | Uploaded %d Bricks to BLAS (Active Sectors: %d)" % [
+		coord, terrain_ms, aabb_bytes.size() / 24, raytracer.get_active_sector_count()
+	])
+
+
+## 传统光栅化回调（兼容回退模式）
 func _on_chunk_task_completed(coord: Vector3i, chunk: Chunk, terrain_ms: int, mesh_ms: int) -> void:
 	in_progress_set.erase(coord)
-
 	var world_pos = coord * chunk_size
-	# 如果在生成期间该区域已被卸载，则丢弃释放
 	if not chunks.has(world_pos) or chunks[world_pos] != chunk:
 		chunk.queue_free()
 		return
@@ -175,12 +287,11 @@ func _on_chunk_task_completed(coord: Vector3i, chunk: Chunk, terrain_ms: int, me
 
 	chunk.apply_prepared_sub_chunks()
 	add_child(chunk)
-	# 建立双向跨 Sector 拓扑，并更新相邻 Sector 的边界接缝消面
 	link_neighbors(coord, chunk)
 	print("[Sector %s] Done Async: Terrain %d ms | Meshing %d ms (Active SubChunks: %d/64)" % [coord, terrain_ms, mesh_ms, chunk.sub_chunks.size()])
 
 
-## 同步生成单个核心区块（用于启动初始化玩家脚下）
+## 同步生成单个核心区块
 func generate_chunk_at_sync(coord: Vector3i) -> void:
 	var world_pos = coord * chunk_size
 	var chunk = create_chunk(world_pos)
@@ -191,19 +302,20 @@ func generate_chunk_at_sync(coord: Vector3i) -> void:
 		empty_chunks[world_pos] = true
 		return
 
-	# 提前关联已就绪邻居
-	for dir in range(6):
-		var n_coord = coord + NEIGHBOR_OFFSETS[dir]
-		var n_pos = n_coord * chunk_size
-		if chunks.has(n_pos):
-			chunk.chunk_data.SetNeighbor(dir, chunks[n_pos].chunk_data)
+	if use_hardware_raytracer and raytracer != null:
+		var aabb_bytes = chunk.chunk_data.GetRayTracingAabbBytes()
+		var brick_bytes = chunk.chunk_data.GetRayTracingBrickBytes()
+		if not aabb_bytes.is_empty():
+			chunks[world_pos] = chunk
+			raytracer.upload_sector_aabbs(coord, aabb_bytes)
+			raytracer.upload_sector_bricks(coord, brick_bytes)
+	else:
+		chunk.create_mesh()
+		add_child(chunk)
+		link_neighbors(coord, chunk)
 
-	chunk.create_mesh()
-	add_child(chunk)
-	link_neighbors(coord, chunk)
 
-
-## 建立 6 向跨 Sector 拓扑关联，消除边界处的接缝隐藏面
+## 建立 6 向跨 Sector 拓扑关联（传统光栅化模式消面使用）
 func link_neighbors(coord: Vector3i, chunk: Chunk) -> void:
 	for dir in range(6):
 		var n_coord = coord + NEIGHBOR_OFFSETS[dir]
@@ -213,12 +325,10 @@ func link_neighbors(coord: Vector3i, chunk: Chunk) -> void:
 			var opp_dir = OPPOSITE_DIRECTIONS[dir]
 			chunk.chunk_data.SetNeighbor(dir, n_chunk.chunk_data)
 			n_chunk.chunk_data.SetNeighbor(opp_dir, chunk.chunk_data)
-			# 触发邻居面对本 Sector 的 16 个边界子区块重构，自动消除原先露在外部的接缝面
 			n_chunk.mark_boundary_dirty(opp_dir)
 			n_chunk.flush_dirty()
 
 
-## 解除 6 向拓扑关联，邻居重新补全封闭面
 func unlink_neighbors(coord: Vector3i, chunk: Chunk) -> void:
 	for dir in range(6):
 		var n_coord = coord + NEIGHBOR_OFFSETS[dir]
@@ -231,11 +341,9 @@ func unlink_neighbors(coord: Vector3i, chunk: Chunk) -> void:
 			n_chunk.flush_dirty()
 
 
-## 卸载远距离区块，释放内存与网格
+## 卸载远距离区块
 func unload_distant_chunks(center_coord: Vector3i) -> void:
 	var unload_dist_sq = unload_distance * unload_distance
-	
-	# 卸载超出范围的实体区块
 	var chunks_to_remove: Array[Vector3i] = []
 	for world_pos in chunks.keys():
 		var cx = floori(float(world_pos.x) / chunk_size)
@@ -248,7 +356,6 @@ func unload_distant_chunks(center_coord: Vector3i) -> void:
 	for world_pos in chunks_to_remove:
 		remove_chunk(world_pos)
 		
-	# 清理过远的空区块缓存，避免空区块列表无限膨胀
 	var empty_to_remove: Array[Vector3i] = []
 	for world_pos in empty_chunks.keys():
 		var cx = floori(float(world_pos.x) / chunk_size)
@@ -261,7 +368,6 @@ func unload_distant_chunks(center_coord: Vector3i) -> void:
 	for world_pos in empty_to_remove:
 		empty_chunks.erase(world_pos)
 		
-	# 清理队列中因角色折返/远离而已超出卸载距离的任务
 	var filtered_queue: Array[Vector3i] = []
 	for coord in load_queue:
 		var dx = coord.x - center_coord.x
@@ -275,22 +381,24 @@ func unload_distant_chunks(center_coord: Vector3i) -> void:
 
 func create_chunk(chunk_position: Vector3i) -> Chunk:
 	remove_chunk(chunk_position)
-		
 	var chunk = chunk_class.instantiate() as Chunk
 	chunk.chunk_data.SetSize(chunk_size)
 	chunk.meshing_algorithm = meshing_algorithm
 	chunk.position = chunk_position
 	chunks[chunk.position] = chunk
-	
 	return chunk
 
 
 func remove_chunk(chunk_position: Vector3i) -> void:
 	if !chunks.has(chunk_position): return
-	
 	var chunk = chunks[chunk_position]
 	var coord = world_to_chunk_coord(chunk_position)
-	unlink_neighbors(coord, chunk)
+	
+	if use_hardware_raytracer and raytracer != null:
+		raytracer.remove_sector(coord)
+	else:
+		unlink_neighbors(coord, chunk)
+		
 	chunks.erase(chunk_position)
 	chunk.queue_free()
 
@@ -300,12 +408,19 @@ func add_voxel(pos: Vector3i, voxel: TerrainAlgorithm.Voxel) -> void:
 	if !chunk:
 		var chunk_origin = voxel_to_chunk_position(pos)
 		chunk = create_chunk(chunk_origin)
-		add_child(chunk)
 		empty_chunks.erase(chunk_origin)
 	
 	var local_position = global_to_local(pos)
 	chunk.add_voxel(local_position, voxel)
-	check_and_notify_neighbors(chunk)
+	
+	if use_hardware_raytracer and raytracer != null:
+		var coord = world_to_chunk_coord(chunk.position)
+		var aabb_bytes = chunk.chunk_data.GetRayTracingAabbBytes()
+		var brick_bytes = chunk.chunk_data.GetRayTracingBrickBytes()
+		raytracer.upload_sector_aabbs(coord, aabb_bytes)
+		raytracer.upload_sector_bricks(coord, brick_bytes)
+	else:
+		check_and_notify_neighbors(chunk)
 
 
 func remove_voxel(pos: Vector3i) -> void:
@@ -320,10 +435,16 @@ func remove_voxel(pos: Vector3i) -> void:
 		remove_chunk(chunk.position)
 		return
 
-	check_and_notify_neighbors(chunk)
+	if use_hardware_raytracer and raytracer != null:
+		var coord = world_to_chunk_coord(chunk.position)
+		var aabb_bytes = chunk.chunk_data.GetRayTracingAabbBytes()
+		var brick_bytes = chunk.chunk_data.GetRayTracingBrickBytes()
+		raytracer.upload_sector_aabbs(coord, aabb_bytes)
+		raytracer.upload_sector_bricks(coord, brick_bytes)
+	else:
+		check_and_notify_neighbors(chunk)
 
 
-## 检查是否因跨 Sector 边缘方块被修改而需要通知相邻 Sector 同步刷新接缝
 func check_and_notify_neighbors(chunk: Chunk) -> void:
 	var neighbor_dirty_mask = chunk.chunk_data.PopDirtyNeighborMask()
 	if neighbor_dirty_mask != 0:
@@ -343,7 +464,6 @@ func get_chunk(pos: Vector3i) -> Chunk:
 	return chunks[chunk_position]
 
 
-## 世界三维坐标转区块网格坐标 (cx, cy, cz)
 func world_to_chunk_coord(world_pos: Vector3) -> Vector3i:
 	return Vector3i(
 		floori(world_pos.x / chunk_size),
@@ -352,7 +472,6 @@ func world_to_chunk_coord(world_pos: Vector3) -> Vector3i:
 	)
 
 
-## 世界体素坐标转所属区块世界原点坐标（严格支持负数坐标）
 func voxel_to_chunk_position(pos: Vector3i) -> Vector3i:
 	return Vector3i(
 		floori(float(pos.x) / chunk_size) * chunk_size,
@@ -361,7 +480,6 @@ func voxel_to_chunk_position(pos: Vector3i) -> Vector3i:
 	)
 
 
-## 世界体素坐标转区块内局部坐标 [0, chunk_size - 1]（严格支持负数坐标）
 func global_to_local(pos: Vector3i) -> Vector3i:
 	var chunk_origin = voxel_to_chunk_position(pos)
 	return pos - chunk_origin
