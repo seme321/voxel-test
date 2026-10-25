@@ -1,0 +1,25 @@
+[gd_scene format=3 uid="uid://dcsnrbmws48ks"]
+
+[ext_resource type="Script" uid="uid://cwbx5r5sktqrg" path="res://scripts/chunck_manager.gd" id="1_ua5i7"]
+[ext_resource type="Script" uid="uid://ch2escudglv1v" path="res://algorithms/meshing/GreedyMeshing.cs" id="2_jai35"]
+[ext_resource type="Script" uid="uid://b25dyjph4haar" path="res://algorithms/terrain/terrain_3d.gd" id="3_urgjd"]
+
+[sub_resource type="Resource" id="Resource_ua5i7"]
+script = ExtResource("2_jai35")
+metadata/_custom_type_script = "uid://ch2escudglv1v"
+
+[sub_resource type="Resource" id="Resource_ngywo"]
+script = ExtResource("3_urgjd")
+metadata/_custom_type_script = "uid://b25dyjph4haar"
+
+[node name="ChunckManager" type="Node" unique_id=1404009431]
+script = ExtResource("1_ua5i7")
+color_array = Dictionary[int, Color]({
+0: Color(0.5937741, 0.62604773, 0, 1),
+1: Color(0, 1, 0, 1),
+2: Color(0.18664795, 0.25868064, 7.219613e-08, 1),
+3: Color(1, 1, 1, 1),
+4: Color(1, 1, 1, 0)
+})
+meshing_algorithm = SubResource("Resource_ua5i7")
+terrain_algorithm = SubResource("Resource_ngywo")

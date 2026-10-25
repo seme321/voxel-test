@@ -1,0 +1,15 @@
+[gd_scene format=3 uid="uid://dh84jil6lln54"]
+
+[ext_resource type="Script" uid="uid://c5ee5t4njt8lu" path="res://scripts/chunk.gd" id="1_dvw1p"]
+[ext_resource type="Shader" uid="uid://bi4js5xt8h7e5" path="res://resources/chunk.gdshader" id="2_ngywo"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_dvw1p"]
+render_priority = 0
+shader = ExtResource("2_ngywo")
+
+[sub_resource type="FastNoiseLite" id="FastNoiseLite_n0mhn"]
+
+[node name="chunk" type="Node3D" unique_id=325380676]
+script = ExtResource("1_dvw1p")
+mat = SubResource("ShaderMaterial_dvw1p")
+biome_noise = SubResource("FastNoiseLite_n0mhn")

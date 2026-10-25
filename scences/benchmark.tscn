@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://bqvqey03duy1u"]
+
+[ext_resource type="Script" uid="uid://d3benchmarkrunnercs" path="res://algorithms/test/BenchmarkRunner.cs" id="1_runner"]
+
+[node name="BenchmarkRunner" type="Node"]
+script = ExtResource("1_runner")

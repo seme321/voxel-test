@@ -1,0 +1,15 @@
+[gd_scene format=3 uid="uid://eu47dplkyeox"]
+
+[ext_resource type="Script" uid="uid://cl0bv7igwmtyn" path="res://scripts/world.gd" id="1_4ud6b"]
+[ext_resource type="PackedScene" uid="uid://dcu4bpt8c4dbb" path="res://scences/player.tscn" id="3_1kupj"]
+[ext_resource type="PackedScene" uid="uid://dcsnrbmws48ks" path="res://scences/chunk/chunck manager.tscn" id="3_oou3t"]
+
+[node name="World" type="Node3D" unique_id=837907518]
+script = ExtResource("1_4ud6b")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=514902002]
+transform = Transform3D(0.70710677, -0.49999997, 0.49999997, 0, 0.70710677, 0.70710677, -0.70710677, -0.49999997, 0.49999997, 0, 0, 0)
+
+[node name="ChunckManager" parent="." unique_id=1404009431 instance=ExtResource("3_oou3t")]
+
+[node name="Player" parent="." unique_id=666385840 instance=ExtResource("3_1kupj")]

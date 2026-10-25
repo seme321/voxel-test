@@ -1,0 +1,15 @@
+# Godot 4+ specific ignores
+.godot/
+/android/
+
+# .NET / Visual Studio ignores
+[Bb]in/
+[Oo]bj/
+.vs/
+*.user
+*.userprefs
+
+# OS / Editor files
+.DS_Store
+Thumbs.db
+*.tmp
