@@ -11,7 +11,7 @@ config_version=5
 [application]
 
 config/name="voxel test"
-run/main_scene="uid://eu47dplkyeox"
+run/main_scene="res://scences/main_menu.tscn"
 config/features=PackedStringArray("4.7", "C#", "Forward Plus")
 config/icon="res://icon.svg"
 
