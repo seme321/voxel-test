@@ -39,19 +39,21 @@ func _setup_interaction_visuals() -> void:
 	# 1. 准星选中体素高亮 3D 线框
 	selection_box = MeshInstance3D.new()
 	selection_box.name = "TargetSelectionBox"
-	selection_box.mesh = _create_wireframe_cube_mesh(1.004)
+	selection_box.top_level = true
+	selection_box.mesh = _create_wireframe_cube_mesh(1.006)
 	
 	var wire_mat = StandardMaterial3D.new()
 	wire_mat.shading_mode = StandardMaterial3D.SHADING_MODE_UNSHADED
-	wire_mat.albedo_color = Color(0.05, 0.05, 0.05, 0.90)
-	wire_mat.render_priority = 2
+	wire_mat.albedo_color = Color(1.0, 1.0, 1.0, 0.95)
+	wire_mat.render_priority = 3
 	selection_box.material_override = wire_mat
 	selection_box.visible = false
-	get_parent().call_deferred("add_child", selection_box)
+	add_child(selection_box)
 
 	# 2. 即将依附放置的目标方块半透明幽灵预览
 	ghost_box = MeshInstance3D.new()
 	ghost_box.name = "PlacementGhostBox"
+	ghost_box.top_level = true
 	var box_mesh = BoxMesh.new()
 	box_mesh.size = Vector3(1.002, 1.002, 1.002)
 	ghost_box.mesh = box_mesh
@@ -59,11 +61,12 @@ func _setup_interaction_visuals() -> void:
 	ghost_material = StandardMaterial3D.new()
 	ghost_material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	ghost_material.shading_mode = StandardMaterial3D.SHADING_MODE_UNSHADED
-	ghost_material.albedo_color = Color(1.0, 1.0, 1.0, 0.40)
-	ghost_material.render_priority = 1
+	ghost_material.cull_mode = BaseMaterial3D.CULL_BACK
+	ghost_material.albedo_color = Color(1.0, 1.0, 1.0, 0.50)
+	ghost_material.render_priority = 2
 	ghost_box.material_override = ghost_material
 	ghost_box.visible = false
-	get_parent().call_deferred("add_child", ghost_box)
+	add_child(ghost_box)
 
 
 ## 构建挖掘进度 UI 进度条（置于准星正下方）

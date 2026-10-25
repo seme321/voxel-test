@@ -110,7 +110,7 @@ func setup_raytracer_display() -> void:
 	if enable_upscaling_filter:
 		rt_texture_rect.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
 	rt_canvas_layer.add_child(rt_texture_rect)
-	apply_camera_bg_canvas()
+	apply_bg_canvas_environment()
 
 	# 准星与状态 HUD
 	if show_rt_hud:
@@ -353,17 +353,38 @@ func find_player() -> void:
 	var players = get_tree().get_nodes_in_group("player")
 	if not players.is_empty():
 		player = players[0] as Node3D
-	apply_camera_bg_canvas()
+	apply_bg_canvas_environment()
 
 
-## 确保 3D 摄像机环境使用 BG_CANVAS，使 Raytracer 画布作为 3D 背景，同时允许 3D 刚体碎片在前景以原生 3D 呈现
-func apply_camera_bg_canvas() -> void:
+## 确保场景包含 WorldEnvironment 并设置 background_mode = BG_CANVAS (3) 和 background_canvas_max_layer = 0
+## 使得 CanvasLayer -10 的硬件光追纹理作为 3D 渲染背景，
+## 允许所有原生 3D 节点（准星高亮线框、放置幽灵预览、刚体碎片、破碎粒子）在前景以原生 3D 准确呈现！
+func apply_bg_canvas_environment() -> void:
+	var we: WorldEnvironment = null
+	if get_parent() != null and get_parent().has_node("WorldEnvironment"):
+		we = get_parent().get_node("WorldEnvironment") as WorldEnvironment
+	elif has_node("WorldEnvironment"):
+		we = get_node("WorldEnvironment") as WorldEnvironment
+	
+	if we == null:
+		we = WorldEnvironment.new()
+		we.name = "WorldEnvironment"
+		add_child(we)
+	
+	if we.environment == null:
+		we.environment = Environment.new()
+		
+	we.environment.background_mode = Environment.BG_CANVAS
+	we.environment.background_canvas_max_layer = 0
+
+	# 同步摄像机环境
 	if player != null and player.has_node("Head/EyeCamera"):
 		var cam = player.get_node("Head/EyeCamera") as Camera3D
 		if cam != null:
 			if cam.environment == null:
 				cam.environment = Environment.new()
 			cam.environment.background_mode = Environment.BG_CANVAS
+			cam.environment.background_canvas_max_layer = 0
 
 
 
