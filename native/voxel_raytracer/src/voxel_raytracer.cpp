@@ -36,29 +36,34 @@ void VoxelRayTracer::_bind_methods() {
 }
 
 VoxelRayTracer::VoxelRayTracer() {
-    rtx_available = true; // RTX 4070 Laptop GPU confirmed
-    UtilityFunctions::print("[VoxelRayTracer] Initializing Native C++ GDExtension Ray Tracer...");
+    UtilityFunctions::print("[VoxelRayTracer] Instantiating Native C++ GDExtension Ray Tracer...");
 }
 
 VoxelRayTracer::~VoxelRayTracer() {
     active_sectors.clear();
     output_image.unref();
     output_texture.unref();
+    if (vk_context) {
+        vk_context->cleanup();
+        vk_context.reset();
+    }
 }
 
 bool VoxelRayTracer::is_rtx_supported() const {
-    return rtx_available;
+    return vk_context ? vk_context->rtx_supported : false;
 }
 
 String VoxelRayTracer::get_gpu_name() const {
-    return gpu_device_name;
+    return vk_context ? vk_context->device_name.c_str() : gpu_device_name;
 }
 
 String VoxelRayTracer::get_raytracer_status() const {
-    if (!is_initialized) {
-        return "Uninitialized";
+    if (!is_initialized || !vk_context || !vk_context->rtx_supported) {
+        return "Uninitialized / Hardware RT Unavailable";
     }
-    return String("Ready | Sectors: ") + String::num_int64(active_sectors.size()) +
+    return String("Ready (Hardware RT Active) | GPU: ") + vk_context->device_name.c_str() +
+           " | SBT Handle: " + String::num_int64(vk_context->sbt_handle_size) + "B" +
+           " | Sectors: " + String::num_int64(active_sectors.size()) +
            " | Resolution: " + String::num_int64(render_width) + "x" + String::num_int64(render_height);
 }
 
@@ -71,12 +76,24 @@ bool VoxelRayTracer::init_raytracer(int p_width, int p_height) {
     render_width = p_width;
     render_height = p_height;
 
+    // Initialize Vulkan Ray Tracing Context
+    if (!vk_context) {
+        vk_context = std::make_unique<VulkanContext>();
+        if (!vk_context->init()) {
+            UtilityFunctions::printerr("[VoxelRayTracer] Failed to initialize Vulkan Ray Tracing Context!");
+            rtx_available = false;
+            return false;
+        }
+        rtx_available = vk_context->rtx_supported;
+        gpu_device_name = vk_context->device_name.c_str();
+    }
+
     // Create presentation texture buffer
     output_image = Image::create_empty(render_width, render_height, false, Image::FORMAT_RGBA8);
     output_texture = ImageTexture::create_from_image(output_image);
 
     is_initialized = true;
-    UtilityFunctions::print("[VoxelRayTracer] Hardware Ray Tracer initialized at ", render_width, "x", render_height);
+    UtilityFunctions::print("[VoxelRayTracer] Hardware Ray Tracer initialized successfully on: ", gpu_device_name, " at ", render_width, "x", render_height);
     return true;
 }
 
@@ -150,7 +167,7 @@ int VoxelRayTracer::get_active_sector_count() const {
 }
 
 void VoxelRayTracer::render_frame(const Transform3D &p_cam_transform, float p_fov) {
-    if (!is_initialized) {
+    if (!is_initialized || !vk_context || !vk_context->rtx_supported) {
         return;
     }
     // Execution will invoke Vulkan vkCmdTraceRaysKHR in Phase 4/5

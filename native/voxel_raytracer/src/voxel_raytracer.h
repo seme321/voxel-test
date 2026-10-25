@@ -8,6 +8,8 @@
 #include <godot_cpp/variant/transform3d.hpp>
 #include <godot_cpp/variant/string.hpp>
 
+#include "vulkan/vulkan_context.h"
+
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -24,7 +26,9 @@ private:
     int ray_bounces = 1;
     bool is_initialized = false;
     bool rtx_available = false;
-    String gpu_device_name = "NVIDIA GeForce RTX 4070 Laptop GPU";
+    String gpu_device_name = "Detecting...";
+
+    std::unique_ptr<VulkanContext> vk_context;
 
     Ref<Image> output_image;
     Ref<ImageTexture> output_texture;

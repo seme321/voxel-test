@@ -13,11 +13,13 @@ add_subdirectory(godot-cpp)
 set(SOURCES
     src/register_types.cpp
     src/voxel_raytracer.cpp
+    src/vulkan/vulkan_context.cpp
 )
 
 set(HEADERS
     src/register_types.h
     src/voxel_raytracer.h
+    src/vulkan/vulkan_context.h
 )
 
 add_library(${PROJECT_NAME} SHARED ${SOURCES} ${HEADERS})
