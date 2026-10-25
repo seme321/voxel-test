@@ -17,7 +17,15 @@ void ClosestHitMain(inout RayPayload payload, AttributeData attrib)
     float lighting = ambient + NdotL * 0.78;
 
     float3 albedo = GetVoxelColor(matID);
-    payload.color = float4(albedo * lighting, 1.0);
+    float3 litColor = albedo * lighting;
+
+    // Atmospheric distance fog (smooth fade into sky dome)
+    float hitT = RayTCurrent();
+    float fog = 1.0 - exp(-hitT * 0.0035);
+    float3 skyFogColor = float3(0.72, 0.80, 0.89);
+    float3 finalColor = lerp(litColor, skyFogColor, clamp(fog, 0.0, 1.0));
+
+    payload.color = float4(finalColor, 1.0);
     payload.normal = worldNormal;
-    payload.hitT = RayTCurrent();
+    payload.hitT = hitT;
 }

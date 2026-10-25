@@ -368,10 +368,11 @@ func dispatch_chunk_task(coord: Vector3i) -> void:
 		var t1 = Time.get_ticks_msec()
 
 		if use_hardware_raytracer:
-			# 【Caelix 硬件光追路线】：极速无 GC 导出 AABB 与 Brick SSBO（~24ms）
+			# 【Caelix 硬件光追路线】：极速无 GC 导出 AABB 与 Brick SSBO（~12ms 单次遍历）
 			if not chunk.chunk_data.IsEmpty():
-				var aabb_bytes = chunk.chunk_data.GetRayTracingAabbBytes()
-				var brick_bytes = chunk.chunk_data.GetRayTracingBrickBytes()
+				var rt_data = chunk.chunk_data.GetRayTracingData()
+				var aabb_bytes = rt_data[0]
+				var brick_bytes = rt_data[1]
 				call_deferred("_on_rt_chunk_task_completed", coord, chunk, aabb_bytes, brick_bytes, t1 - t0)
 			else:
 				call_deferred("_on_rt_chunk_task_completed", coord, chunk, PackedByteArray(), PackedByteArray(), t1 - t0)
@@ -441,8 +442,9 @@ func generate_chunk_at_sync(coord: Vector3i) -> void:
 		return
 
 	if use_hardware_raytracer and raytracer != null:
-		var aabb_bytes = chunk.chunk_data.GetRayTracingAabbBytes()
-		var brick_bytes = chunk.chunk_data.GetRayTracingBrickBytes()
+		var rt_data = chunk.chunk_data.GetRayTracingData()
+		var aabb_bytes = rt_data[0]
+		var brick_bytes = rt_data[1]
 		if not aabb_bytes.is_empty():
 			chunks[world_pos] = chunk
 			raytracer.upload_sector_aabbs(coord, aabb_bytes)
@@ -553,8 +555,9 @@ func add_voxel(pos: Vector3i, voxel: TerrainAlgorithm.Voxel) -> void:
 	
 	if use_hardware_raytracer and raytracer != null:
 		var coord = world_to_chunk_coord(chunk.position)
-		var aabb_bytes = chunk.chunk_data.GetRayTracingAabbBytes()
-		var brick_bytes = chunk.chunk_data.GetRayTracingBrickBytes()
+		var rt_data = chunk.chunk_data.GetRayTracingData()
+		var aabb_bytes = rt_data[0]
+		var brick_bytes = rt_data[1]
 		raytracer.upload_sector_aabbs(coord, aabb_bytes)
 		raytracer.upload_sector_bricks(coord, brick_bytes)
 		update_local_collider(true)
@@ -578,8 +581,9 @@ func remove_voxel(pos: Vector3i) -> void:
 
 	if use_hardware_raytracer and raytracer != null:
 		var coord = world_to_chunk_coord(chunk.position)
-		var aabb_bytes = chunk.chunk_data.GetRayTracingAabbBytes()
-		var brick_bytes = chunk.chunk_data.GetRayTracingBrickBytes()
+		var rt_data = chunk.chunk_data.GetRayTracingData()
+		var aabb_bytes = rt_data[0]
+		var brick_bytes = rt_data[1]
 		raytracer.upload_sector_aabbs(coord, aabb_bytes)
 		raytracer.upload_sector_bricks(coord, brick_bytes)
 		update_local_collider(true)

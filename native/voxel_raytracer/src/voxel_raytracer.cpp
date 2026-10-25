@@ -615,12 +615,6 @@ void VoxelRayTracer::render_frame(const Transform3D &p_cam_transform, float p_fo
         memcpy(output_pixel_buffer.ptrw(), staging_output_buffer.mapped_ptr, render_width * render_height * 4);
         output_image->set_data(render_width, render_height, false, Image::FORMAT_RGBA8, output_pixel_buffer);
         output_texture->update(output_image);
-
-        const uint8_t* pix = static_cast<const uint8_t*>(staging_output_buffer.mapped_ptr);
-        size_t center_offset = ((render_height / 2) * render_width + (render_width / 2)) * 4;
-        UtilityFunctions::print("[VoxelRayTracer] GPU Frame Rendered! Center Pixel (RGBA8): (",
-                                pix[center_offset], ", ", pix[center_offset + 1], ", ",
-                                pix[center_offset + 2], ", ", pix[center_offset + 3], ")");
     }
 }
 

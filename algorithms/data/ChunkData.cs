@@ -734,6 +734,15 @@ public partial class ChunkData : Resource
 		return (aabbBytes, brickBytes);
 	}
 
+	/// <summary>
+	/// 单次高效返回 AABB 与 Brick 字节数组，彻底消除重复双倍序列化开销
+	/// </summary>
+	public Godot.Collections.Array<byte[]> GetRayTracingData()
+	{
+		var (aabb, brick) = SerializeRayTracingData();
+		return new Godot.Collections.Array<byte[]> { aabb, brick };
+	}
+
 	public byte[] GetRayTracingAabbBytes() => SerializeRayTracingData().aabbBytes;
 	public byte[] GetRayTracingBrickBytes() => SerializeRayTracingData().brickBytes;
 }
