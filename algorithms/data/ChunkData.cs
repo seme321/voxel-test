@@ -663,7 +663,11 @@ public partial class ChunkData : Resource
 	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
-	public bool IsSolid(int x, int y, int z) => GetVoxel(x, y, z) != Voxel.AIR;
+	public bool IsSolid(int x, int y, int z)
+	{
+		var v = GetVoxel(x, y, z);
+		return v != Voxel.AIR && v != Voxel.WATER;
+	}
 
 	[MethodImpl(MethodImplOptions.AggressiveInlining)]
 	public static ushort MapVoxelToRayTracingId(Voxel v) => v switch

@@ -108,6 +108,7 @@ func setup_raytracer_display() -> void:
 	if enable_upscaling_filter:
 		rt_texture_rect.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
 	rt_canvas_layer.add_child(rt_texture_rect)
+	apply_camera_bg_canvas()
 
 	# 准星与状态 HUD
 	if show_rt_hud:
@@ -332,6 +333,18 @@ func find_player() -> void:
 	var players = get_tree().get_nodes_in_group("player")
 	if not players.is_empty():
 		player = players[0] as Node3D
+	apply_camera_bg_canvas()
+
+
+## 确保 3D 摄像机环境使用 BG_CANVAS，使 Raytracer 画布作为 3D 背景，同时允许 3D 刚体碎片在前景以原生 3D 呈现
+func apply_camera_bg_canvas() -> void:
+	if player != null and player.has_node("Head/EyeCamera"):
+		var cam = player.get_node("Head/EyeCamera") as Camera3D
+		if cam != null:
+			if cam.environment == null:
+				cam.environment = Environment.new()
+			cam.environment.background_mode = Environment.BG_CANVAS
+
 
 
 ## 启动时立即同步生成近处核心区块（毫秒级秒进）
