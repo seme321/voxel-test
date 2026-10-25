@@ -543,7 +543,7 @@ func remove_chunk(chunk_position: Vector3i) -> void:
 	chunk.queue_free()
 
 
-func add_voxel(pos: Vector3i, voxel: TerrainAlgorithm.Voxel) -> void:
+func add_voxel(pos: Vector3i, voxel: int = 1) -> void:
 	var chunk = get_chunk(pos)
 	if !chunk:
 		var chunk_origin = voxel_to_chunk_position(pos)

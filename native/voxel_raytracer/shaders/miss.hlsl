@@ -9,7 +9,7 @@ void MissMain(inout RayPayload payload)
     float3 sky = lerp(float3(0.75, 0.82, 0.90), float3(0.20, 0.45, 0.85), clamp(t, 0.0, 1.0));
     
     // Add sun highlight
-    float3 sunDir = normalize(float3(0.6, 0.8, 0.4));
+    float3 sunDir = normalize(float3(0.55, 0.75, 0.35));
     float sun = max(0.0, dot(rayDir, sunDir));
     sky += float3(1.0, 0.9, 0.7) * pow(sun, 64.0);
 

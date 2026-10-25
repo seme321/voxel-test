@@ -411,17 +411,20 @@ bool VulkanASManager::build_tlas() {
     }
     memcpy(tlas_instance_buffer.mapped_ptr, instances.data(), instance_size);
 
-    // 3. Upload Consolidated Brick Buffer for all active sectors
-    VkDeviceSize brick_buf_size = (total_brick_bytes > 0) ? total_brick_bytes : 1096;
-    if (!create_buffer(brick_buf_size,
-                       VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                       global_brick_buffer)) {
-        UtilityFunctions::printerr("[VulkanASManager] Failed to create global brick buffer!");
-        return false;
+    // 3. Upload Consolidated Brick Buffer for all active sectors using persistent Sparse Pool
+    VkDeviceSize required_size = (total_brick_bytes > 0) ? total_brick_bytes : 1096;
+    if (global_brick_buffer.buffer == VK_NULL_HANDLE || global_brick_buffer.size < required_size) {
+        VkDeviceSize pool_size = std::max<VkDeviceSize>(required_size, static_cast<VkDeviceSize>(128 * 1024 * 1024)); // 128 MB pool
+        if (!create_buffer(pool_size,
+                           VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
+                           VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                           global_brick_buffer)) {
+            UtilityFunctions::printerr("[VulkanASManager] Failed to allocate global brick pool buffer!");
+            return false;
+        }
     }
 
-    if (total_brick_bytes > 0) {
+    if (total_brick_bytes > 0 && global_brick_buffer.mapped_ptr) {
         uint8_t* dst_ptr = static_cast<uint8_t*>(global_brick_buffer.mapped_ptr);
         for (const auto& pair : sectors) {
             const SectorBLAS& s = pair.second;
@@ -429,7 +432,7 @@ bool VulkanASManager::build_tlas() {
                 memcpy(dst_ptr + (s.global_brick_offset * 1096), s.brick_data.data(), s.brick_data.size());
             }
         }
-    } else {
+    } else if (global_brick_buffer.mapped_ptr) {
         memset(global_brick_buffer.mapped_ptr, 0, 1096);
     }
 
