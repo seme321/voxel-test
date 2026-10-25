@@ -291,6 +291,9 @@ bool VulkanContext::load_device_functions() {
     LOAD_DEV_FN(vkUpdateDescriptorSets);
     LOAD_DEV_FN(vkCreatePipelineLayout);
     LOAD_DEV_FN(vkDestroyPipelineLayout);
+    LOAD_DEV_FN(vkDestroyPipeline);
+    LOAD_DEV_FN(vkCmdBindPipeline);
+    LOAD_DEV_FN(vkCmdBindDescriptorSets);
 
     // RT Extensions
     LOAD_DEV_FN(vkCreateAccelerationStructureKHR);

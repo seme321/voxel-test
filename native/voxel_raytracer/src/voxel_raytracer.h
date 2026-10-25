@@ -10,6 +10,7 @@
 
 #include "vulkan/vulkan_context.h"
 #include "vulkan/vulkan_rt_pipeline.h"
+#include "vulkan/vulkan_as_manager.h"
 
 #include <memory>
 #include <string>
@@ -17,6 +18,16 @@
 #include <vector>
 
 namespace godot {
+
+struct alignas(16) CameraParams {
+    float viewInverse[16];
+    float projInverse[16];
+    float camPos[4];
+    float fov;
+    uint32_t width;
+    uint32_t height;
+    uint32_t frameIndex;
+};
 
 class VoxelRayTracer : public Node3D {
     GDCLASS(VoxelRayTracer, Node3D)
@@ -28,14 +39,30 @@ private:
     bool is_initialized = false;
     bool rtx_available = false;
     String gpu_device_name = "Detecting...";
+    uint32_t frame_index = 0;
+    bool tlas_dirty = true;
 
     std::unique_ptr<VulkanContext> vk_context;
     std::unique_ptr<VulkanRayTracingPipeline> rt_pipeline;
+    std::unique_ptr<VulkanASManager> as_manager;
 
+    // Vulkan Offscreen Output Target & Staging
+    VkImage vk_render_target = VK_NULL_HANDLE;
+    VkDeviceMemory vk_render_target_memory = VK_NULL_HANDLE;
+    VkImageView vk_render_target_view = VK_NULL_HANDLE;
+    VulkanBuffer staging_output_buffer;
+    VulkanBuffer camera_uniform_buffer;
+
+    // Descriptors
+    VkDescriptorPool descriptor_pool = VK_NULL_HANDLE;
+    VkDescriptorSet descriptor_set = VK_NULL_HANDLE;
+
+    // Presentation image & texture
     Ref<Image> output_image;
     Ref<ImageTexture> output_texture;
+    PackedByteArray output_pixel_buffer;
 
-    // Sector registration tracking
+    // Sector staging
     struct SectorData {
         Vector3i pos;
         PackedByteArray aabbs;
@@ -48,6 +75,10 @@ private:
                (((int64_t)(p_pos.y & 0x1FFFFF)) << 21) |
                (((int64_t)(p_pos.z & 0x1FFFFF)) << 42);
     }
+
+    bool init_render_targets();
+    void cleanup_render_targets();
+    bool update_descriptor_set();
 
 protected:
     static void _bind_methods();
@@ -79,6 +110,7 @@ public:
     // Render & Presentation
     void render_frame(const Transform3D &p_cam_transform, float p_fov);
     Ref<ImageTexture> get_output_texture();
+    Ref<Image> get_output_image();
 };
 
 } // namespace godot

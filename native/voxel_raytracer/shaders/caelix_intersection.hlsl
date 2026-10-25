@@ -67,7 +67,7 @@ inline uint ReadVoxelID(uint brickBase, int3 localPos) {
 void IntersectionMain()
 {
     uint primID = PrimitiveIndex();
-    uint brickBase = primID * BRICK_DATA_BYTES;
+    uint brickBase = (InstanceID() + primID) * BRICK_DATA_BYTES;
 
     // Load Word 0 and Word 1
     uint2 brickInfo = g_Bricks.Load2(brickBase);

@@ -12,10 +12,10 @@ struct CameraParams {
 };
 
 // Global Bindings (Set 0)
-RaytracingAccelerationStructure g_AccelStruct : register(t0, space0);
-RWTexture2D<float4> g_OutputTarget : register(u0, space0);
-ByteAddressBuffer g_Bricks : register(t1, space0);
-ConstantBuffer<CameraParams> g_Camera : register(b0, space0);
+[[vk::binding(0, 0)]] RaytracingAccelerationStructure g_AccelStruct : register(t0, space0);
+[[vk::binding(1, 0)]] RWTexture2D<float4> g_OutputTarget : register(u0, space0);
+[[vk::binding(2, 0)]] ByteAddressBuffer g_Bricks : register(t1, space0);
+[[vk::binding(3, 0)]] ConstantBuffer<CameraParams> g_Camera : register(b0, space0);
 
 struct RayPayload {
     float4 color;

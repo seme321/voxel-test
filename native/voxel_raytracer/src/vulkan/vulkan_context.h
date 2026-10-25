@@ -93,6 +93,9 @@ public:
     PFN_vkUpdateDescriptorSets vkUpdateDescriptorSets = nullptr;
     PFN_vkCreatePipelineLayout vkCreatePipelineLayout = nullptr;
     PFN_vkDestroyPipelineLayout vkDestroyPipelineLayout = nullptr;
+    PFN_vkDestroyPipeline vkDestroyPipeline = nullptr;
+    PFN_vkCmdBindPipeline vkCmdBindPipeline = nullptr;
+    PFN_vkCmdBindDescriptorSets vkCmdBindDescriptorSets = nullptr;
 
     // Ray Tracing Extensions (VK_KHR_acceleration_structure & VK_KHR_ray_tracing_pipeline)
     PFN_vkCreateAccelerationStructureKHR vkCreateAccelerationStructureKHR = nullptr;

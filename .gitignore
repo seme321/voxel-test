@@ -18,6 +18,9 @@ native/**/vulkan-headers/
 *.lib
 *.pdb
 
+# Test outputs
+raytraced_*.png
+
 # OS / Editor files
 .DS_Store
 Thumbs.db

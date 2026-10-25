@@ -15,6 +15,7 @@ set(SOURCES
     src/voxel_raytracer.cpp
     src/vulkan/vulkan_context.cpp
     src/vulkan/vulkan_rt_pipeline.cpp
+    src/vulkan/vulkan_as_manager.cpp
 )
 
 set(HEADERS
@@ -22,6 +23,7 @@ set(HEADERS
     src/voxel_raytracer.h
     src/vulkan/vulkan_context.h
     src/vulkan/vulkan_rt_pipeline.h
+    src/vulkan/vulkan_as_manager.h
     src/vulkan/embedded_shaders.h
 )
 

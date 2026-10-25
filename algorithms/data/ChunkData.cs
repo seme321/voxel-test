@@ -614,4 +614,113 @@ public partial class ChunkData : Resource
 
 	public int NumberOfVoxels() => numberOfVoxels;
 	public bool IsEmpty() => numberOfVoxels <= 0;
+
+	/// <summary>
+	/// 为硬件光追 (RTX Vulkan / Caelix Scheme) 序列化此 Sector 的 BLAS AABB 与 Brick 负载。
+	/// 仅导出非空的 8^3 Brick，每个 AABB 24 字节，每个 Brick 1096 字节。
+	/// </summary>
+	public (byte[] aabbBytes, byte[] brickBytes) SerializeRayTracingData()
+	{
+		int activeBrickCount = 0;
+		for (int w = 0; w < coarseWords; ++w)
+		{
+			activeBrickCount += System.Numerics.BitOperations.PopCount(CoarseOccupancy[w]);
+		}
+
+		if (activeBrickCount == 0)
+		{
+			return (Array.Empty<byte>(), Array.Empty<byte>());
+		}
+
+		byte[] aabbBytes = new byte[activeBrickCount * 24];
+		byte[] brickBytes = new byte[activeBrickCount * 1096];
+
+		int aabbOffset = 0;
+		int brickOffset = 0;
+
+		for (int w = 0; w < coarseWords; ++w)
+		{
+			ulong mask = CoarseOccupancy[w];
+			while (mask != 0UL)
+			{
+				int bit = System.Numerics.BitOperations.TrailingZeroCount(mask);
+				int bIndex = (w << 6) | bit;
+				mask &= mask - 1UL; // 清除最低位的 1
+
+				ref VoxelBrick brick = ref bricks[bIndex];
+				int bx = bIndex & 15;
+				int by = (bIndex >> 4) & 15;
+				int bz = bIndex >> 8;
+
+				// 1. 写入 AABB (24 字节: 6 个 float)
+				float minX = bx * 8.0f;
+				float minY = by * 8.0f;
+				float minZ = bz * 8.0f;
+				float maxX = minX + 8.0f;
+				float maxY = minY + 8.0f;
+				float maxZ = minZ + 8.0f;
+
+				Span<byte> aabbSpan = aabbBytes.AsSpan(aabbOffset, 24);
+				System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(aabbSpan.Slice(0, 4), minX);
+				System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(aabbSpan.Slice(4, 4), minY);
+				System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(aabbSpan.Slice(8, 4), minZ);
+				System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(aabbSpan.Slice(12, 4), maxX);
+				System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(aabbSpan.Slice(16, 4), maxY);
+				System.Buffers.Binary.BinaryPrimitives.WriteSingleLittleEndian(aabbSpan.Slice(20, 4), maxZ);
+				aabbOffset += 24;
+
+				// 2. 写入 1096 字节 Brick 记录
+				Span<byte> bSpan = brickBytes.AsSpan(brickOffset, 1096);
+
+				// Word 0: bIndex (低 12 位) | (coarseOcc << 16)
+				uint word0 = (uint)(bIndex & 0xFFF) | (0xFFu << 16);
+				System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(bSpan.Slice(0, 4), word0);
+
+				// Word 1: tightBounds (min 0..7, max 0..7)
+				uint tightBounds = 0u | (0u << 3) | (0u << 6) | (7u << 9) | (7u << 12) | (7u << 15);
+				System.Buffers.Binary.BinaryPrimitives.WriteUInt32LittleEndian(bSpan.Slice(4, 4), tightBounds);
+
+				// Words 2..17: 512-bit occupancy mask (64 字节 = 8 个 ulong)
+				System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bSpan.Slice(8, 8), brick.Mask0);
+				System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bSpan.Slice(16, 8), brick.Mask1);
+				System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bSpan.Slice(24, 8), brick.Mask2);
+				System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bSpan.Slice(32, 8), brick.Mask3);
+				System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bSpan.Slice(40, 8), brick.Mask4);
+				System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bSpan.Slice(48, 8), brick.Mask5);
+				System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bSpan.Slice(56, 8), brick.Mask6);
+				System.Buffers.Binary.BinaryPrimitives.WriteUInt64LittleEndian(bSpan.Slice(64, 8), brick.Mask7);
+
+				// Words 18..273: 512 个体素 ID (1024 字节, 每个 16 位)
+				Span<byte> voxSpan = bSpan.Slice(72, 1024);
+				if (brick.IsUniform)
+				{
+					ushort matId = (ushort)brick.UniformVoxel;
+					for (int v = 0; v < 512; ++v)
+					{
+						System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(voxSpan.Slice(v * 2, 2), matId);
+					}
+				}
+				else if (brick.PayloadOffset >= 0)
+				{
+					int pOff = brick.PayloadOffset;
+					for (int v = 0; v < 512; ++v)
+					{
+						ushort matId = (ushort)voxelPayloads[pOff + v];
+						System.Buffers.Binary.BinaryPrimitives.WriteUInt16LittleEndian(voxSpan.Slice(v * 2, 2), matId);
+					}
+				}
+				else
+				{
+					voxSpan.Clear();
+				}
+
+				brickOffset += 1096;
+			}
+		}
+
+		return (aabbBytes, brickBytes);
+	}
+
+	public byte[] GetRayTracingAabbBytes() => SerializeRayTracingData().aabbBytes;
+	public byte[] GetRayTracingBrickBytes() => SerializeRayTracingData().brickBytes;
 }
