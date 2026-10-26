@@ -743,17 +743,22 @@ func remove_voxels_batch(positions: Array[Vector3i]) -> void:
 			if not chunks.has(chunk_pos):
 				continue
 			var chunk = chunks[chunk_pos]
+			if chunk.chunk_data.IsEmpty():
+				empty_chunks[chunk.position] = true
+				remove_chunk(chunk.position)
+				continue
+
 			var brick_map = affected_bricks[coord]
+			# 先极速热补丁更新显存中的体素记录
+			for b_idx in brick_map.keys():
+				var b_bytes = chunk.chunk_data.SerializeSingleBrick(b_idx)
+				raytracer.patch_sector_brick(coord, b_idx, b_bytes)
 			
-			# 如果该区块被修改的 Brick 数量适中，单砖极速热补丁
-			if brick_map.size() <= 8:
-				for b_idx in brick_map.keys():
-					var b_bytes = chunk.chunk_data.SerializeSingleBrick(b_idx)
-					raytracer.patch_sector_brick(coord, b_idx, b_bytes)
-			else:
-				dirty_rt_sectors[coord] = chunk
+			# 同时加入延迟刷新队列，确保在帧末刷新时精确重建 BLAS AABB 包围盒与 TLAS 实例
+			dirty_rt_sectors[coord] = chunk
 				
 		local_collider_dirty = true
+		flush_dirty_rt_sectors()
 	else:
 		# 光栅化模式：每个受影响区块仅 flush_dirty 一次
 		for chunk in affected_chunks.keys():

@@ -326,7 +326,6 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event is InputEventMouseButton and event.pressed:
 		if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
-			return
 
 		# 鼠标右键：单次依附放置当前手持选中的体素
 		if event.button_index == MOUSE_BUTTON_RIGHT:
@@ -343,7 +342,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.button_index == MOUSE_BUTTON_MIDDLE:
 			if current_hit.get("hit", false) and chunk_manager != null:
 				var hit_center = Vector3(current_hit["position"]) + Vector3(0.5, 0.5, 0.5)
-				VoxelExplosion.trigger_explosion(hit_center, 2.4, 15.0, chunk_manager)
+				VoxelExplosion.trigger_explosion(hit_center, 2.6, 18.0, chunk_manager)
 
 	# 键盘 'G' 键：投掷物理动态 TNT 炸药包
 	elif event is InputEventKey and event.pressed and not event.echo:
@@ -351,53 +350,19 @@ func _unhandled_input(event: InputEvent) -> void:
 			throw_dynamite()
 
 
-## 投掷动态 TNT 炸药实体
+## 投掷动态 TNT 炸药实体 (Caelix TNT Projectile)
 func throw_dynamite() -> void:
 	if chunk_manager == null or eye_camera == null:
 		return
 
 	var cam_forward = -eye_camera.global_transform.basis.z.normalized()
-	var spawn_pos = eye_camera.global_position + cam_forward * 1.0
+	var spawn_pos = eye_camera.global_position + cam_forward * 0.8
+	var init_vel = cam_forward * 16.0 + Vector3.UP * 4.0
 
-	var tnt = RigidBody3D.new()
-	tnt.name = "DynamicTNT_%d" % Time.get_ticks_msec()
-	tnt.position = spawn_pos
-	tnt.mass = 3.0
-	tnt.linear_damp = 0.1
-	tnt.angular_damp = 0.2
-
-	var col = CollisionShape3D.new()
-	var box_col = BoxShape3D.new()
-	box_col.size = Vector3(0.5, 0.5, 0.5)
-	col.shape = box_col
-	tnt.add_child(col)
-
-	var mesh_inst = MeshInstance3D.new()
-	var box_m = BoxMesh.new()
-	box_m.size = Vector3(0.5, 0.5, 0.5)
-	mesh_inst.mesh = box_m
-	var mat = StandardMaterial3D.new()
-	mat.albedo_color = Color(0.9, 0.2, 0.15, 1.0)
-	mat.emission_enabled = true
-	mat.emission = Color(1.0, 0.8, 0.2, 1.0)
-	mat.emission_energy_multiplier = 1.2
-	mesh_inst.material_override = mat
-	tnt.add_child(mesh_inst)
-
+	var tnt = TNTProjectile.new()
 	var scene_root = get_parent() if get_parent() != null else self
 	scene_root.add_child(tnt)
-
-	tnt.linear_velocity = cam_forward * 16.0 + Vector3.UP * 3.5
-	tnt.angular_velocity = Vector3(randf_range(-6, 6), randf_range(-6, 6), randf_range(-6, 6))
-
-	# 1.8 秒后引爆
-	var timer = get_tree().create_timer(1.8)
-	timer.timeout.connect(func():
-		if is_instance_valid(tnt):
-			var blast_pos = tnt.global_position
-			tnt.queue_free()
-			VoxelExplosion.trigger_explosion(blast_pos, 2.8, 18.0, chunk_manager)
-	)
+	tnt.setup(spawn_pos, init_vel, chunk_manager)
 
 
 ## 3D DDA (Amanatides-Woo) 极速射线检测（亚微秒级命中判定）
