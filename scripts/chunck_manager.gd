@@ -12,6 +12,18 @@ class_name ChunkManager extends Node
 @export var enable_upscaling_filter: bool = true
 @export var show_rt_hud: bool = true
 
+@export_group("Raytracing Visuals (Route A)")
+@export var sun_direction: Vector3 = Vector3(0.55, 0.75, 0.35).normalized()
+@export var sun_color: Color = Color(1.0, 0.96, 0.88, 1.0)
+@export var sun_intensity: float = 1.0
+@export var ambient_intensity: float = 0.28
+@export var rtao_strength: float = 0.65
+@export var rtao_radius: float = 2.5
+@export var soft_shadow_angle: float = 0.035
+@export var enable_rtao: bool = true
+@export var enable_shadows: bool = true
+@export var sun_cycle_speed: float = 0.0
+
 @export_group("Dynamic Streaming")
 @export var player: Node3D
 @export var view_distance: int = 2 # 水平视距半径（以 128^3 Sector 为单位，2 表示 5x5 区域，覆盖 640x640 米）
@@ -81,6 +93,15 @@ func _ready() -> void:
 		add_child(raytracer)
 		var ok = raytracer.init_raytracer(rt_render_width, rt_render_height)
 		if ok:
+			raytracer.set_sun_direction(sun_direction)
+			raytracer.set_sun_color(sun_color)
+			raytracer.set_sun_intensity(sun_intensity)
+			raytracer.set_ambient_intensity(ambient_intensity)
+			raytracer.set_rtao_strength(rtao_strength)
+			raytracer.set_rtao_radius(rtao_radius)
+			raytracer.set_soft_shadow_angle(soft_shadow_angle)
+			raytracer.set_enable_rtao(enable_rtao)
+			raytracer.set_enable_shadows(enable_shadows)
 			setup_raytracer_display()
 			setup_local_collider()
 			print("[ChunkManager] Caelix Hardware Raytracing Pipeline Activated on: ", raytracer.get_gpu_name())
@@ -311,20 +332,65 @@ func _process(_delta: float) -> void:
 	# 硬件光追逐帧渲染调度
 	if use_hardware_raytracer and raytracer != null and player != null:
 		flush_dirty_rt_sectors()
+
+		# 动态太阳光与光追参数更新
+		if sun_cycle_speed > 0.001:
+			var t_rad = Time.get_ticks_msec() * 0.001 * sun_cycle_speed
+			sun_direction = Vector3(cos(t_rad) * 0.75, max(sin(t_rad), 0.08), sin(t_rad) * 0.45).normalized()
+			raytracer.set_sun_direction(sun_direction)
+		else:
+			var dir_light = get_node_or_null("../DirectionalLight3D")
+			if dir_light != null and is_instance_valid(dir_light):
+				var light_sun_dir = dir_light.global_transform.basis.z.normalized()
+				raytracer.set_sun_direction(light_sun_dir)
+				raytracer.set_sun_color(dir_light.light_color)
+
 		var cam = player.eye_camera
 		if cam != null:
 			raytracer.render_frame(cam.global_transform, cam.fov)
 			if rt_hud_label != null:
 				var fps = Engine.get_frames_per_second()
-				rt_hud_label.text = "[Caelix RT Mode] FPS: %d\nGPU: %s\nActive Sectors: %d | Resolution: %dx%d\nCam Pos: (%.1f, %.1f, %.1f) | Flying: %s (Press 'F' to toggle)" % [
+				var cur_sdir = raytracer.get_sun_direction()
+				rt_hud_label.text = "[Caelix RT Mode] FPS: %d | RTAO: %s | Soft Shadows: %s\nGPU: %s\nActive Sectors: %d | Resolution: %dx%d\nCam Pos: (%.1f, %.1f, %.1f) | Flying: %s\nSun Dir: (%.2f, %.2f, %.2f) (F6: AO, F7: Shadows, [/]: Sun Angle)" % [
 					fps,
+					"ON" if raytracer.is_rtao_enabled() else "OFF",
+					"ON" if raytracer.is_shadows_enabled() else "OFF",
 					raytracer.get_gpu_name(),
 					raytracer.get_active_sector_count(),
 					rt_render_width,
 					rt_render_height,
 					player.global_position.x, player.global_position.y, player.global_position.z,
-					str(player.flying)
+					str(player.flying),
+					cur_sdir.x, cur_sdir.y, cur_sdir.z
 				]
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	if not use_hardware_raytracer or raytracer == null:
+		return
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_F6:
+			enable_rtao = not enable_rtao
+			raytracer.set_enable_rtao(enable_rtao)
+			print("[Raytracer] RTAO toggled: ", enable_rtao)
+		elif event.keycode == KEY_F7:
+			enable_shadows = not enable_shadows
+			raytracer.set_enable_shadows(enable_shadows)
+			print("[Raytracer] Shadows toggled: ", enable_shadows)
+		elif event.keycode == KEY_BRACKETLEFT:
+			var cur_dir = raytracer.get_sun_direction()
+			var rotated = cur_dir.rotated(Vector3.UP, deg_to_rad(-10.0))
+			raytracer.set_sun_direction(rotated)
+			var dir_light = get_node_or_null("../DirectionalLight3D")
+			if dir_light != null and is_instance_valid(dir_light):
+				dir_light.look_at(dir_light.global_position - rotated, Vector3.UP)
+		elif event.keycode == KEY_BRACKETRIGHT:
+			var cur_dir = raytracer.get_sun_direction()
+			var rotated = cur_dir.rotated(Vector3.UP, deg_to_rad(10.0))
+			raytracer.set_sun_direction(rotated)
+			var dir_light = get_node_or_null("../DirectionalLight3D")
+			if dir_light != null and is_instance_valid(dir_light):
+				dir_light.look_at(dir_light.global_position - rotated, Vector3.UP)
 
 
 ## 延迟扇区批量刷新：将单帧内上百个微小体素变更（落沙、水流）合并为单次 BLAS 重建与物理更新，彻底杜绝 GC 暴涨与 GPU 管线等待

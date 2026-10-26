@@ -38,6 +38,39 @@ void VoxelRayTracer::_bind_methods() {
     ClassDB::bind_method(D_METHOD("render_frame", "camera_transform", "fov"), &VoxelRayTracer::render_frame);
     ClassDB::bind_method(D_METHOD("get_output_texture"), &VoxelRayTracer::get_output_texture);
     ClassDB::bind_method(D_METHOD("get_output_image"), &VoxelRayTracer::get_output_image);
+
+    // Lighting & Visual Settings (Route A)
+    ClassDB::bind_method(D_METHOD("set_sun_direction", "direction"), &VoxelRayTracer::set_sun_direction);
+    ClassDB::bind_method(D_METHOD("get_sun_direction"), &VoxelRayTracer::get_sun_direction);
+    ClassDB::bind_method(D_METHOD("set_sun_color", "color"), &VoxelRayTracer::set_sun_color);
+    ClassDB::bind_method(D_METHOD("get_sun_color"), &VoxelRayTracer::get_sun_color);
+    ClassDB::bind_method(D_METHOD("set_sun_intensity", "intensity"), &VoxelRayTracer::set_sun_intensity);
+    ClassDB::bind_method(D_METHOD("get_sun_intensity"), &VoxelRayTracer::get_sun_intensity);
+    ClassDB::bind_method(D_METHOD("set_ambient_intensity", "ambient"), &VoxelRayTracer::set_ambient_intensity);
+    ClassDB::bind_method(D_METHOD("get_ambient_intensity"), &VoxelRayTracer::get_ambient_intensity);
+    ClassDB::bind_method(D_METHOD("set_rtao_strength", "strength"), &VoxelRayTracer::set_rtao_strength);
+    ClassDB::bind_method(D_METHOD("get_rtao_strength"), &VoxelRayTracer::get_rtao_strength);
+    ClassDB::bind_method(D_METHOD("set_rtao_radius", "radius"), &VoxelRayTracer::set_rtao_radius);
+    ClassDB::bind_method(D_METHOD("get_rtao_radius"), &VoxelRayTracer::get_rtao_radius);
+    ClassDB::bind_method(D_METHOD("set_soft_shadow_angle", "angle"), &VoxelRayTracer::set_soft_shadow_angle);
+    ClassDB::bind_method(D_METHOD("get_soft_shadow_angle"), &VoxelRayTracer::get_soft_shadow_angle);
+    ClassDB::bind_method(D_METHOD("set_water_specular", "specular"), &VoxelRayTracer::set_water_specular);
+    ClassDB::bind_method(D_METHOD("get_water_specular"), &VoxelRayTracer::get_water_specular);
+    ClassDB::bind_method(D_METHOD("set_enable_rtao", "enable"), &VoxelRayTracer::set_enable_rtao);
+    ClassDB::bind_method(D_METHOD("is_rtao_enabled"), &VoxelRayTracer::is_rtao_enabled);
+    ClassDB::bind_method(D_METHOD("set_enable_shadows", "enable"), &VoxelRayTracer::set_enable_shadows);
+    ClassDB::bind_method(D_METHOD("is_shadows_enabled"), &VoxelRayTracer::is_shadows_enabled);
+
+    ADD_PROPERTY(PropertyInfo(Variant::VECTOR3, "sun_direction"), "set_sun_direction", "get_sun_direction");
+    ADD_PROPERTY(PropertyInfo(Variant::COLOR, "sun_color"), "set_sun_color", "get_sun_color");
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "sun_intensity"), "set_sun_intensity", "get_sun_intensity");
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "ambient_intensity"), "set_ambient_intensity", "get_ambient_intensity");
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "rtao_strength"), "set_rtao_strength", "get_rtao_strength");
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "rtao_radius"), "set_rtao_radius", "get_rtao_radius");
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "soft_shadow_angle"), "set_soft_shadow_angle", "get_soft_shadow_angle");
+    ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "water_specular"), "set_water_specular", "get_water_specular");
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "enable_rtao"), "set_enable_rtao", "is_rtao_enabled");
+    ADD_PROPERTY(PropertyInfo(Variant::BOOL, "enable_shadows"), "set_enable_shadows", "is_shadows_enabled");
 }
 
 VoxelRayTracer::VoxelRayTracer() {
@@ -184,7 +217,9 @@ bool VoxelRayTracer::init_render_targets() {
     current_frame = 0;
 
     // 4. Create Camera Uniform Buffer
-    if (!as_manager->create_buffer(256,
+    size_t ubo_size = sizeof(CameraParams);
+    if (ubo_size < 256) ubo_size = 256;
+    if (!as_manager->create_buffer(ubo_size,
                                    VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
                                    VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                                    camera_uniform_buffer)) {
@@ -610,6 +645,22 @@ void VoxelRayTracer::render_frame(const Transform3D &p_cam_transform, float p_fo
     cam.height = static_cast<uint32_t>(render_height);
     cam.frameIndex = frame_index++;
 
+    Vector3 sdir = sun_direction.length_squared() > 1e-6f ? sun_direction.normalized() : Vector3(0.55f, 0.75f, 0.35f).normalized();
+    cam.sunDir[0] = sdir.x;
+    cam.sunDir[1] = sdir.y;
+    cam.sunDir[2] = sdir.z;
+    cam.sunDir[3] = enable_shadows ? sun_intensity : 0.0f;
+
+    cam.sunColor[0] = sun_color.r;
+    cam.sunColor[1] = sun_color.g;
+    cam.sunColor[2] = sun_color.b;
+    cam.sunColor[3] = ambient_intensity;
+
+    cam.visualSettings[0] = enable_rtao ? rtao_strength : 0.0f;
+    cam.visualSettings[1] = rtao_radius;
+    cam.visualSettings[2] = soft_shadow_angle;
+    cam.visualSettings[3] = water_specular;
+
     if (camera_uniform_buffer.mapped_ptr) {
         memcpy(camera_uniform_buffer.mapped_ptr, &cam, sizeof(CameraParams));
     }
@@ -709,6 +760,78 @@ Ref<ImageTexture> VoxelRayTracer::get_output_texture() {
 
 Ref<Image> VoxelRayTracer::get_output_image() {
     return output_image;
+}
+
+void VoxelRayTracer::set_sun_direction(const Vector3 &p_dir) {
+    if (p_dir.length_squared() > 1e-6f) {
+        sun_direction = p_dir.normalized();
+    }
+}
+Vector3 VoxelRayTracer::get_sun_direction() const {
+    return sun_direction;
+}
+
+void VoxelRayTracer::set_sun_color(const Color &p_color) {
+    sun_color = p_color;
+}
+Color VoxelRayTracer::get_sun_color() const {
+    return sun_color;
+}
+
+void VoxelRayTracer::set_sun_intensity(float p_intensity) {
+    sun_intensity = (p_intensity < 0.0f) ? 0.0f : p_intensity;
+}
+float VoxelRayTracer::get_sun_intensity() const {
+    return sun_intensity;
+}
+
+void VoxelRayTracer::set_ambient_intensity(float p_ambient) {
+    ambient_intensity = (p_ambient < 0.0f) ? 0.0f : p_ambient;
+}
+float VoxelRayTracer::get_ambient_intensity() const {
+    return ambient_intensity;
+}
+
+void VoxelRayTracer::set_rtao_strength(float p_strength) {
+    rtao_strength = (p_strength < 0.0f) ? 0.0f : ((p_strength > 1.0f) ? 1.0f : p_strength);
+}
+float VoxelRayTracer::get_rtao_strength() const {
+    return rtao_strength;
+}
+
+void VoxelRayTracer::set_rtao_radius(float p_radius) {
+    rtao_radius = (p_radius < 0.1f) ? 0.1f : p_radius;
+}
+float VoxelRayTracer::get_rtao_radius() const {
+    return rtao_radius;
+}
+
+void VoxelRayTracer::set_soft_shadow_angle(float p_angle) {
+    soft_shadow_angle = (p_angle < 0.0f) ? 0.0f : p_angle;
+}
+float VoxelRayTracer::get_soft_shadow_angle() const {
+    return soft_shadow_angle;
+}
+
+void VoxelRayTracer::set_water_specular(float p_specular) {
+    water_specular = (p_specular < 0.0f) ? 0.0f : p_specular;
+}
+float VoxelRayTracer::get_water_specular() const {
+    return water_specular;
+}
+
+void VoxelRayTracer::set_enable_rtao(bool p_enable) {
+    enable_rtao = p_enable;
+}
+bool VoxelRayTracer::is_rtao_enabled() const {
+    return enable_rtao;
+}
+
+void VoxelRayTracer::set_enable_shadows(bool p_enable) {
+    enable_shadows = p_enable;
+}
+bool VoxelRayTracer::is_shadows_enabled() const {
+    return enable_shadows;
 }
 
 } // namespace godot

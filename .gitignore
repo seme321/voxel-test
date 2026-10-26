@@ -21,6 +21,9 @@ native/**/vulkan-headers/
 # Test outputs
 raytraced_*.png
 raytraced_*.png.import
+test_*.png
+test_*.png.import
+*.log
 
 # OS / Editor files
 .DS_Store

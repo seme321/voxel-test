@@ -9,6 +9,9 @@ struct CameraParams {
     uint width;
     uint height;
     uint frameIndex;
+    float4 sunDir;         // xyz: normalized sun dir, w: sun intensity
+    float4 sunColor;       // rgb: sun color, w: ambient intensity
+    float4 visualSettings; // x: rtao_strength, y: rtao_radius, z: soft_shadow_angle, w: water_specular
 };
 
 // Global Bindings (Set 0)
@@ -21,6 +24,7 @@ struct RayPayload {
     float4 color;
     float3 normal;
     float hitT;
+    uint matID;
 };
 
 struct AttributeData {
@@ -63,6 +67,48 @@ inline float3 GetVoxelColor(uint matID) {
         case 11: return float3(1.00, 0.85, 0.30); // 11: Glowstone warm gold
         default: return float3(0.80, 0.30, 0.70); // Custom / Debug magenta
     }
+}
+
+// Atmospheric Procedural Sky Model
+inline float3 GetSkyColor(float3 dir, float3 sunDir, float3 sunColor) {
+    float sunDot = dot(dir, sunDir);
+    float height = clamp(dir.y, -1.0, 1.0);
+    float sunHeight = clamp(sunDir.y, -1.0, 1.0);
+    
+    // Sunset / sunrise horizon warm golden-orange transition
+    float sunsetFactor = clamp(1.0 - abs(sunHeight), 0.0, 1.0);
+    float3 horizonColor = lerp(float3(0.70, 0.78, 0.88), float3(0.96, 0.52, 0.22), sunsetFactor * 0.85);
+    float3 zenithColor = lerp(float3(0.18, 0.42, 0.85), float3(0.08, 0.18, 0.45), sunsetFactor * 0.6);
+    
+    float t = clamp(height * 0.5 + 0.5, 0.0, 1.0);
+    float3 baseSky = lerp(horizonColor * 0.7, zenithColor, pow(t, 0.75));
+    if (dir.y < 0.0) {
+        baseSky = lerp(horizonColor * 0.7, float3(0.15, 0.14, 0.13), clamp(-dir.y * 3.0, 0.0, 1.0));
+    }
+    
+    // Sun disc & atmospheric halo
+    float sunDisc = max(0.0, sunDot);
+    float disc = pow(sunDisc, 512.0) * 4.0;
+    float corona = pow(max(0.0, sunDot), 32.0) * 0.45;
+    
+    return baseSky + sunColor * (disc + corona);
+}
+
+// Pseudo-random 2D hash for jittering
+inline uint HashUInt2(uint2 v, uint seed) {
+    uint h = seed ^ (v.x * 0x27d4eb2d) ^ (v.y * 0x165667b1);
+    h = (h ^ 61) ^ (h >> 16);
+    h += (h << 3);
+    h ^= (h >> 4);
+    h *= 0x27d4eb2d;
+    h ^= (h >> 15);
+    return h;
+}
+
+inline float2 Hash2D(uint2 pixel, uint frame, uint sampleIndex) {
+    uint h1 = HashUInt2(pixel, frame * 1973u + sampleIndex * 9277u + 1u);
+    uint h2 = HashUInt2(pixel, frame * 3149u + sampleIndex * 4099u + 1013904223u);
+    return float2((h1 & 0x00FFFFFFu) / 16777216.0f, (h2 & 0x00FFFFFFu) / 16777216.0f);
 }
 
 #endif // COMMON_HLSL

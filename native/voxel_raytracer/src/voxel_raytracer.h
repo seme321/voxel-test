@@ -27,6 +27,9 @@ struct alignas(16) CameraParams {
     uint32_t width;
     uint32_t height;
     uint32_t frameIndex;
+    float sunDir[4];
+    float sunColor[4];
+    float visualSettings[4];
 };
 
 class VoxelRayTracer : public Node3D {
@@ -41,6 +44,18 @@ private:
     String gpu_device_name = "Detecting...";
     uint32_t frame_index = 0;
     bool tlas_dirty = true;
+
+    // Lighting & Visual Settings (Route A)
+    Vector3 sun_direction = Vector3(0.55f, 0.75f, 0.35f).normalized();
+    Color sun_color = Color(1.0f, 0.96f, 0.88f, 1.0f);
+    float sun_intensity = 1.0f;
+    float ambient_intensity = 0.28f;
+    float rtao_strength = 0.65f;
+    float rtao_radius = 2.5f;
+    float soft_shadow_angle = 0.035f;
+    float water_specular = 1.0f;
+    bool enable_rtao = true;
+    bool enable_shadows = true;
 
     std::unique_ptr<VulkanContext> vk_context;
     std::unique_ptr<VulkanRayTracingPipeline> rt_pipeline;
@@ -117,6 +132,28 @@ public:
     void remove_sector(const Vector3i &p_pos);
     bool patch_sector_brick(const Vector3i &p_pos, int p_bindex, const PackedByteArray &p_brick_bytes);
     int get_active_sector_count() const;
+
+    // Lighting & Visual Settings API (Route A)
+    void set_sun_direction(const Vector3 &p_dir);
+    Vector3 get_sun_direction() const;
+    void set_sun_color(const Color &p_color);
+    Color get_sun_color() const;
+    void set_sun_intensity(float p_intensity);
+    float get_sun_intensity() const;
+    void set_ambient_intensity(float p_ambient);
+    float get_ambient_intensity() const;
+    void set_rtao_strength(float p_strength);
+    float get_rtao_strength() const;
+    void set_rtao_radius(float p_radius);
+    float get_rtao_radius() const;
+    void set_soft_shadow_angle(float p_angle);
+    float get_soft_shadow_angle() const;
+    void set_water_specular(float p_specular);
+    float get_water_specular() const;
+    void set_enable_rtao(bool p_enable);
+    bool is_rtao_enabled() const;
+    void set_enable_shadows(bool p_enable);
+    bool is_shadows_enabled() const;
 
     // Render & Presentation
     void render_frame(const Transform3D &p_cam_transform, float p_fov);
