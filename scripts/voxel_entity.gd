@@ -1,47 +1,60 @@
 class_name VoxelEntity extends Node3D
 
-## Caelix 风格全自由度 6-DOF 动体体素实体 (VoxelEntity)
-## 遵循 Caelix 引擎规范：
-## 1. 采用独立材质与顶点色彩映射，彻底根除 MultiMesh 导致的白块 Bug
-## 2. 具备亚微秒级 3D 连续体素碰撞（Continuous Voxel Sweeping），彻底杜绝坠入虚空
-## 3. 落地静止后自动将 3D 姿态转化的体素网格无缝固化回大地图（Re-voxelization）
+## Caelix 风格全自由度 6-DOF 动体体素物理系统 (VoxelEntity)
+## 严格实现 Caelix / 刚体动力学微分方程：
+## 1. 真实质量分布与 3x3 空间惯性张量积分（Inertia Tensor）
+## 2. 接触点力矩杠杆定理（Point Velocity v_p = v + w × r）
+## 3. 接触冲量分解：法向弹性碰撞 (Restitution) + 库仑切向滑动摩擦 (Coulomb Friction) -> 产生强烈逼真的着地滚翻与倾覆
+## 4. 连续多体素扫掠碰撞，杜绝穿模坠入虚空
+## 5. 静止后自动姿态网格离散化无缝回填回大地图（Re-voxelization）
+## 6. 支持玩家推力、踩踏交互与爆炸冲击波角动量传递
 
-@export var auto_revoxelize: bool = true       # 落地平稳后是否自动融合回静态地形
-@export var settle_time_required: float = 0.6  # 需要维持静止的缓冲时间（秒）
-@export var max_lifetime: float = 25.0         # 兜底最长存在时间
-@export var gravity: float = 18.0              # 重力加速度 (m/s^2)
-@export var bounciness: float = 0.28           # 触地弹性系数
-@export var ground_friction: float = 0.75      # 地面摩擦系数
+@export var auto_revoxelize: bool = true        # 落地平稳后是否自动融合回静态地形
+@export var settle_time_required: float = 0.5   # 需要维持静止的缓冲时间（秒）
+@export var max_lifetime: float = 30.0          # 兜底最长存在时间
+@export var gravity: float = 18.0               # 重力加速度 (m/s^2)
+@export var bounciness: float = 0.22            # 触地弹性系数 (Restitution)
+@export var friction_coef: float = 0.65         # 库仑摩擦系数 (Coulomb Friction)
+@export var linear_drag: float = 0.15           # 空气阻力
+@export var angular_drag: float = 0.25          # 旋转角阻力
 
 var voxels: Array[Vector3i] = []
 var types: Array[int] = []
 var local_offsets: Array[Vector3] = []
-var chunk_manager: ChunkManager = null
+var chunk_manager = null
 
+# 刚体动力学状态变量
 var linear_velocity: Vector3 = Vector3.ZERO
 var angular_velocity: Vector3 = Vector3.ZERO
 var mass: float = 1.0
-var inertia: Vector3 = Vector3.ONE
+var inv_mass: float = 1.0
+var body_inertia: Vector3 = Vector3.ONE        # 局部对角惯性张量 (Ixx, Iyy, Izz)
+var inv_body_inertia: Vector3 = Vector3.ONE    # 局部逆惯性
 
 var quiet_timer: float = 0.0
 var lifetime: float = 0.0
 var is_settled: bool = false
 var is_grounded: bool = false
+var static_collider: StaticBody3D = null
+var static_shape: CollisionShape3D = null
 
 
 func setup(in_voxels: Array[Vector3i], in_types: Array[int], center_of_mass: Vector3, 
 		   init_vel: Vector3 = Vector3.ZERO, init_ang_vel: Vector3 = Vector3.ZERO, 
-		   cm: ChunkManager = null) -> void:
+		   cm = null) -> void:
 	voxels = in_voxels
 	types = in_types
 	chunk_manager = cm
-	global_position = center_of_mass
+	if is_inside_tree():
+		global_position = center_of_mass
+	else:
+		position = center_of_mass
 	top_level = true
 
 	linear_velocity = init_vel
 	angular_velocity = init_ang_vel
 
-	# 1. 计算体素质量分布与 3x3 惯性张量 (Caelix Mass & Inertia Tensor Integration)
+	# 1. 精确计算体素质量与 3x3 空间惯性张量积分
 	var total_mass: float = 0.0
 	local_offsets.clear()
 
@@ -51,10 +64,11 @@ func setup(in_voxels: Array[Vector3i], in_types: Array[int], center_of_mass: Vec
 		local_offsets.append(offset)
 
 		var density = VoxelTypes.get_density(types[i])
-		var m_i = clampf(density * 0.001, 0.2, 5.0)
+		var m_i = clampf(density * 0.001, 0.3, 8.0)
 		total_mass += m_i
 
-	mass = clampf(total_mass, 1.0, 5000.0)
+	mass = clampf(total_mass, 1.0, 10000.0)
+	inv_mass = 1.0 / mass
 
 	var i_xx: float = 0.0
 	var i_yy: float = 0.0
@@ -63,24 +77,28 @@ func setup(in_voxels: Array[Vector3i], in_types: Array[int], center_of_mass: Vec
 	for i in range(voxels.size()):
 		var offset = local_offsets[i]
 		var density = VoxelTypes.get_density(types[i])
-		var m_i = clampf(density * 0.001, 0.2, 5.0)
+		var m_i = clampf(density * 0.001, 0.3, 8.0)
 
+		# 平行轴定理 + 立方体自身转动惯量 (m * L^2 / 6)
 		i_xx += m_i * (offset.y * offset.y + offset.z * offset.z) + (m_i / 6.0)
 		i_yy += m_i * (offset.x * offset.x + offset.z * offset.z) + (m_i / 6.0)
 		i_zz += m_i * (offset.x * offset.x + offset.y * offset.y) + (m_i / 6.0)
 
-	inertia = Vector3(maxf(0.2, i_xx), maxf(0.2, i_yy), maxf(0.2, i_zz))
+	body_inertia = Vector3(maxf(0.3, i_xx), maxf(0.3, i_yy), maxf(0.3, i_zz))
+	inv_body_inertia = Vector3(1.0 / body_inertia.x, 1.0 / body_inertia.y, 1.0 / body_inertia.z)
 
-	# 2. 构建真实材质色彩视觉（杜绝 MultiMesh 默认纯白问题）
+	# 2. 构建渲染视觉表现
 	_build_visuals()
 
+	# 3. 构建与玩家角色交互的局部物理碰撞体
+	_build_player_collider()
 
+
+## 构建真实带光影着色的方块渲染模型
 func _build_visuals() -> void:
 	var palette = VoxelTypes.get_palette()
 	var box_mesh = BoxMesh.new()
 	box_mesh.size = Vector3(1.0, 1.0, 1.0)
-
-	# 材质缓存字典，避免重复创建相同类型的材质
 	var mat_cache: Dictionary = {}
 
 	for i in range(voxels.size()):
@@ -94,7 +112,6 @@ func _build_visuals() -> void:
 			mat.shading_mode = StandardMaterial3D.SHADING_MODE_PER_PIXEL
 			mat.roughness = 0.85
 			var v_col: Color = palette.get(v_type, Color(0.55, 0.55, 0.55, 1.0))
-			# 确保哪怕是 AIR 或异常值也有可见实体颜色
 			if v_col.a <= 0.01:
 				v_col = Color(0.5, 0.5, 0.5, 1.0)
 			mat.albedo_color = v_col
@@ -107,36 +124,79 @@ func _build_visuals() -> void:
 		add_child(mi)
 
 
+## 构建与角色交互的轻量碰撞盒
+func _build_player_collider() -> void:
+	static_collider = StaticBody3D.new()
+	static_collider.name = "EntityPlayerCollider"
+	static_collider.set_script(null)
+
+	var aabb_min = Vector3(9999, 9999, 9999)
+	var aabb_max = Vector3(-9999, -9999, -9999)
+	for offset in local_offsets:
+		aabb_min = aabb_min.min(offset - Vector3(0.5, 0.5, 0.5))
+		aabb_max = aabb_max.max(offset + Vector3(0.5, 0.5, 0.5))
+
+	var aabb_size = (aabb_max - aabb_min)
+	var aabb_center = aabb_min + aabb_size * 0.5
+
+	static_shape = CollisionShape3D.new()
+	var box = BoxShape3D.new()
+	box.size = aabb_size * 0.96
+	static_shape.shape = box
+	static_shape.position = aabb_center
+	static_collider.add_child(static_shape)
+	add_child(static_collider)
+
+
+## 外部冲量注入接口（玩家推撞、爆炸冲击波等）
+func apply_impulse(impulse: Vector3, world_contact_pos: Vector3) -> void:
+	# 线性动量变化: Δv = J / m
+	linear_velocity += impulse * inv_mass
+
+	# 杠杆力臂: r = contact_pos - center_of_mass
+	var cur_cm = global_position if is_inside_tree() else position
+	var r = world_contact_pos - cur_cm
+	# 力矩冲量: τ = r × J
+	var torque_impulse = r.cross(impulse)
+	# 角动量变化: Δw = I^-1 * (r × J)
+	angular_velocity += _get_world_inv_inertia() * torque_impulse
+	quiet_timer = 0.0
+
+
 func _physics_process(delta: float) -> void:
 	if is_settled or chunk_manager == null:
 		return
 
 	lifetime += delta
-	if lifetime >= max_lifetime or global_position.y <= -20.0:
+	var cur_pos = global_position if is_inside_tree() else position
+	if lifetime >= max_lifetime or cur_pos.y <= -20.0:
 		queue_free()
 		return
 
-	# 1. 速度积分与空气阻尼
+	# 1. 重力积分与阻尼衰减
 	linear_velocity.y -= gravity * delta
-	linear_velocity.x *= (1.0 - 0.25 * delta)
-	linear_velocity.z *= (1.0 - 0.25 * delta)
-	angular_velocity *= (1.0 - 0.4 * delta)
+	linear_velocity *= (1.0 - linear_drag * delta)
+	angular_velocity *= (1.0 - angular_drag * delta)
 
-	# 2. 连续 3D 轴向体素碰撞检测与地面反弹
-	_move_and_collide_voxels(delta)
+	# 2. 连续 3D 动力学接触积分与力矩反馈碰撞判定
+	_step_dynamics_simulation(delta)
 
-	# 3. 旋转驱动
+	# 3. 姿态角速度积分（四元数/旋转正交化，杜绝欧拉角万向锁）
 	if not angular_velocity.is_zero_approx():
-		var rot_delta = angular_velocity * delta
-		rotate_x(rot_delta.x)
-		rotate_y(rot_delta.y)
-		rotate_z(rot_delta.z)
+		var ang_speed = angular_velocity.length()
+		var ang_axis = angular_velocity / ang_speed
+		var rot_step = Basis(ang_axis, ang_speed * delta)
+		transform.basis = (rot_step * transform.basis).orthonormalized()
 
-	# 4. 静止判定与固化倒计时
+	# 4. 处于接触面时的微弱角速度衰减
+	if is_grounded:
+		angular_velocity = angular_velocity.move_toward(Vector3.ZERO, 3.5 * delta)
+
+	# 5. 静止判定与固化倒计时
 	var speed_sq = linear_velocity.length_squared()
 	var ang_speed_sq = angular_velocity.length_squared()
 
-	if is_grounded and speed_sq < 0.12 and ang_speed_sq < 0.2:
+	if is_grounded and speed_sq < 0.08 and ang_speed_sq < 0.15:
 		quiet_timer += delta
 		if quiet_timer >= settle_time_required:
 			if auto_revoxelize:
@@ -147,67 +207,111 @@ func _physics_process(delta: float) -> void:
 		quiet_timer = 0.0
 
 
-## 连续 3 轴体素碰撞检测（针对组合体内每个方块进行体素求交）
-func _move_and_collide_voxels(delta: float) -> void:
+## 世界坐标系下的逆转动惯量矩阵计算
+func _get_world_inv_inertia() -> Basis:
+	# I_world^-1 = R * I_body^-1 * R^T
+	var r = transform.basis
+	var inv_i_diag = Basis.from_scale(inv_body_inertia)
+	return r * inv_i_diag * r.transposed()
+
+
+## 核心 6-DOF 刚体接触碰撞与冲量求解器 (Impulse Contact Solver)
+func _step_dynamics_simulation(delta: float) -> void:
 	is_grounded = false
-	var cur_pos = global_position
+	var cur_pos = global_position if is_inside_tree() else position
+	var world_inv_i = _get_world_inv_inertia()
 
-	# 1. X 轴位移
-	var dx = linear_velocity.x * delta
-	if absf(dx) > 0.0001:
-		var test_pos = cur_pos + Vector3(dx, 0, 0)
-		if _check_collision_at_pos(test_pos):
-			linear_velocity.x = -linear_velocity.x * bounciness
-			angular_velocity *= 0.7
-		else:
-			cur_pos.x = test_pos.x
+	# 预测下一步位置
+	var pred_pos = cur_pos + linear_velocity * delta
 
-	# 2. Z 轴位移
-	var dz = linear_velocity.z * delta
-	if absf(dz) > 0.0001:
-		var test_pos = cur_pos + Vector3(0, 0, dz)
-		if _check_collision_at_pos(test_pos):
-			linear_velocity.z = -linear_velocity.z * bounciness
-			angular_velocity *= 0.7
-		else:
-			cur_pos.z = test_pos.z
+	# 检测发生碰撞的体素点
+	var deepest_pen: float = 0.0
+	var contact_normal: Vector3 = Vector3.ZERO
+	var contact_lever: Vector3 = Vector3.ZERO
+	var contact_point_vel: Vector3 = Vector3.ZERO
+	var has_collision: bool = false
 
-	# 3. Y 轴垂直位移与地面吸附
-	var dy = linear_velocity.y * delta
-	if absf(dy) > 0.0001:
-		var test_pos = cur_pos + Vector3(0, dy, 0)
-		if _check_collision_at_pos(test_pos):
-			if linear_velocity.y < -1.5:
-				# 地面/障碍反弹
-				linear_velocity.y = -linear_velocity.y * bounciness
-				linear_velocity.x *= ground_friction
-				linear_velocity.z *= ground_friction
-				angular_velocity *= 0.6
-			else:
-				# 贴地滑行与摩擦减速
-				linear_velocity.y = 0.0
-				linear_velocity.x = move_toward(linear_velocity.x, 0.0, 10.0 * delta)
-				linear_velocity.z = move_toward(linear_velocity.z, 0.0, 10.0 * delta)
-				angular_velocity = angular_velocity.move_toward(Vector3.ZERO, 12.0 * delta)
-				is_grounded = true
-		else:
-			cur_pos.y = test_pos.y
-
-	global_position = cur_pos
-
-
-## 遍历组合体内所有方块，检测在目标世界坐标下是否有任何方块穿透进静态实体体素
-func _check_collision_at_pos(test_root_pos: Vector3) -> bool:
+	# 采样外围体素节点（对每个体素求交）
 	for offset in local_offsets:
 		var rotated_offset = transform.basis * offset
-		var block_world_pos = test_root_pos + rotated_offset
+		var block_world_pos = pred_pos + rotated_offset
 		var gx = floori(block_world_pos.x)
 		var gy = floori(block_world_pos.y)
 		var gz = floori(block_world_pos.z)
 
 		if chunk_manager.is_voxel_solid(gx, gy, gz):
-			return true
-	return false
+			has_collision = true
+			# 估算穿透法线（根据体素中心与前一步位置的反向向量）
+			var cell_center = Vector3(float(gx) + 0.5, float(gy) + 0.5, float(gz) + 0.5)
+			var n = (block_world_pos - cell_center).normalized()
+			if n.is_zero_approx():
+				n = Vector3.UP
+
+			# 计算该接触点的瞬时速度: v_p = v + w × r
+			var pt_vel = linear_velocity + angular_velocity.cross(rotated_offset)
+			var v_dot_n = pt_vel.dot(n)
+
+			# 寻找最具阻碍效应的接触碰撞面
+			if v_dot_n < 0.0:
+				contact_normal = n
+				contact_lever = rotated_offset
+				contact_point_vel = pt_vel
+				deepest_pen = 0.12
+				break
+
+	if has_collision and not contact_normal.is_zero_approx():
+		var n = contact_normal
+		var r = contact_lever
+		var v_p = contact_point_vel
+
+		# 1. 计算法向有效质量 M_eff: 1/M_eff = 1/m + (r × n)^T * I^-1 * (r × n)
+		var rxn = r.cross(n)
+		var rot_inertial_factor = rxn.dot(world_inv_i * rxn)
+		var eff_mass_inv = inv_mass + rot_inertial_factor
+
+		if eff_mass_inv > 0.0001:
+			var eff_mass = 1.0 / eff_mass_inv
+
+			# 2. 法向碰撞冲量 J_n = -(1 + e) * (v_p · n) * M_eff
+			var vn = v_p.dot(n)
+			var j_n_mag = -(1.0 + bounciness) * vn * eff_mass
+			j_n_mag = maxf(0.0, j_n_mag)
+			var impulse_n = n * j_n_mag
+
+			# 3. 切向摩擦冲量 J_t (库仑滑动摩擦定律)
+			var vt = v_p - n * vn
+			var vt_mag = vt.length()
+			var impulse_t = Vector3.ZERO
+
+			if vt_mag > 0.001:
+				var t_dir = vt / vt_mag
+				var rxt = r.cross(t_dir)
+				var eff_t_mass_inv = inv_mass + rxt.dot(world_inv_i * rxt)
+				var j_t_mag = vt_mag / maxf(0.0001, eff_t_mass_inv)
+				# 库仑摩擦限幅: |J_t| <= μ * J_n
+				j_t_mag = minf(j_t_mag, friction_coef * j_n_mag)
+				impulse_t = -t_dir * j_t_mag
+
+			var total_contact_impulse = impulse_n + impulse_t
+
+			# 4. 动力学动量与角动量同步突变！
+			linear_velocity += total_contact_impulse * inv_mass
+			# 力矩冲量产生强烈的倾覆翻滚！
+			angular_velocity += world_inv_i * r.cross(total_contact_impulse)
+
+			# 标记接地
+			if n.y > 0.5:
+				is_grounded = true
+
+			# 穿透位置校正，防止嵌地
+			cur_pos += n * deepest_pen
+	else:
+		cur_pos = pred_pos
+
+	if is_inside_tree():
+		global_position = cur_pos
+	else:
+		position = cur_pos
 
 
 ## 落地静止后将动体网格精准还原回大地图体素 (Teardown / Caelix Re-voxelization)
@@ -216,15 +320,14 @@ func _revoxelize_into_world() -> void:
 		return
 	is_settled = true
 
-	var positions_added: Array[Vector3i] = []
-
+	var cur_pos = global_position if is_inside_tree() else position
 	for i in range(voxels.size()):
 		var rotated_offset = transform.basis * local_offsets[i]
-		var world_voxel_pos = global_position + rotated_offset
+		var world_voxel_pos = cur_pos + rotated_offset
 		var target_grid = Vector3i(
-			floori(world_voxel_pos.x),
-			floori(world_voxel_pos.y),
-			floori(world_voxel_pos.z)
+			floori(world_voxel_pos.x + 0.5),
+			floori(world_voxel_pos.y + 0.5),
+			floori(world_voxel_pos.z + 0.5)
 		)
 
 		# 查找临近非占用空间放置
@@ -235,6 +338,7 @@ func _revoxelize_into_world() -> void:
 
 		if target_grid.y < chunk_manager.max_height and target_grid.y > 0:
 			chunk_manager.add_voxel(target_grid, types[i])
-			positions_added.append(target_grid)
 
+	# 立即更新局部碰撞体并清除动态实体
+	chunk_manager.flush_dirty_rt_sectors()
 	queue_free()

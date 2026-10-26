@@ -472,13 +472,7 @@ func _check_single_component_integrity(start_pos: Vector3i, global_visited: Dict
 			is_anchored = true
 			break
 
-		# 终止条件 2：如果当前方块下方是实体支撑（非重力非流体），直接认定接地稳定！
-		var below_v = chunk_manager.get_voxel(curr.x, curr.y - 1, curr.z)
-		if VoxelTypes.is_solid(below_v) and not VoxelTypes.has_gravity(below_v) and not VoxelTypes.is_fluid(below_v):
-			is_anchored = true
-			break
-
-		# 终止条件 3：体素量超过孤岛上限，说明是连绵大陆/大山的一部分，结构稳定
+		# 终止条件 2：体素量超过孤岛上限，说明是连绵大陆/大山的一部分，结构稳定
 		if component_voxels.size() > max_debris_size:
 			is_anchored = true
 			break
@@ -510,10 +504,9 @@ func spawn_debris_entity(voxels: Array[Vector3i], types: Array[int]) -> void:
 		sum_pos += Vector3(p.x + 0.5, p.y + 0.5, p.z + 0.5)
 	var center_of_mass = sum_pos / float(voxels.size())
 
-	# 2. 从静态体素世界中抹除（内部原子操作，杜绝递归循环）
+	# 2. 从静态体素世界中批量原子抹除（触发单次 BLAS 重建，杜绝卡顿与残影）
 	_is_internal_op = true
-	for p in voxels:
-		chunk_manager.remove_voxel(p)
+	chunk_manager.remove_voxels_batch(voxels)
 	_is_internal_op = false
 
 	# 3. 实例化 Caelix 风格 6-DOF 动体体素实体 (VoxelEntity)

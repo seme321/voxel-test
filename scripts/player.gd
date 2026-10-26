@@ -150,6 +150,13 @@ func _physics_process(delta: float) -> void:
 				push_dir = push_dir.normalized()
 			var push_force = 140.0
 			collider.apply_impulse(push_dir * push_force * delta, collision.get_position() - collider.global_position)
+		elif collider != null and collider.get_parent() is VoxelEntity:
+			var vent = collider.get_parent() as VoxelEntity
+			var push_dir = -collision.get_normal()
+			push_dir.y = 0.0
+			if not push_dir.is_zero_approx():
+				push_dir = push_dir.normalized()
+			vent.apply_impulse(push_dir * 220.0 * delta, collision.get_position())
 	
 	if is_on_floor() and not floor_logged:
 		floor_logged = true

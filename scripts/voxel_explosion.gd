@@ -78,7 +78,19 @@ static func trigger_explosion(epicenter: Vector3, radius: float, blast_power: fl
 		scene_root.add_child(debris)
 		debris.setup(item["type"], item["pos"], item["vel"], chunk_manager)
 
-	# 5. 对周围物理刚体（VoxelEntity 等）施加真实径向冲量
+	# 5. 对周围物理刚体与 6-DOF VoxelEntity 施加真实径向冲量与角动力矩
+	var voxel_entities = scene_root.find_children("*", "VoxelEntity", true, false)
+	for vent in voxel_entities:
+		if is_instance_valid(vent) and vent is VoxelEntity:
+			var to_vent = vent.global_position - epicenter
+			var dist = to_vent.length()
+			if dist < radius * 2.5 and dist > 0.01:
+				var falloff = 1.0 - (dist / (radius * 2.5))
+				var norm = to_vent / dist
+				var impulse = (norm * 1.5 + Vector3.UP * 0.85) * (blast_power * falloff * vent.mass * 0.6)
+				var contact_p = epicenter + norm * minf(dist, radius)
+				vent.apply_impulse(impulse, contact_p)
+
 	var world_3d: World3D = null
 	if chunk_manager.get_parent() is Node3D:
 		world_3d = (chunk_manager.get_parent() as Node3D).get_world_3d()
