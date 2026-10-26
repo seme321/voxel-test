@@ -343,7 +343,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		elif event.button_index == MOUSE_BUTTON_MIDDLE:
 			if current_hit.get("hit", false) and chunk_manager != null:
 				var hit_center = Vector3(current_hit["position"]) + Vector3(0.5, 0.5, 0.5)
-				VoxelExplosion.trigger_explosion(hit_center, 3.6, 26.0, chunk_manager)
+				VoxelExplosion.trigger_explosion(hit_center, 2.4, 15.0, chunk_manager)
 
 	# 键盘 'G' 键：投掷物理动态 TNT 炸药包
 	elif event is InputEventKey and event.pressed and not event.echo:
@@ -396,7 +396,7 @@ func throw_dynamite() -> void:
 		if is_instance_valid(tnt):
 			var blast_pos = tnt.global_position
 			tnt.queue_free()
-			VoxelExplosion.trigger_explosion(blast_pos, 3.8, 28.0, chunk_manager)
+			VoxelExplosion.trigger_explosion(blast_pos, 2.8, 18.0, chunk_manager)
 	)
 
 

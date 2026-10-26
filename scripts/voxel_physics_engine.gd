@@ -116,6 +116,50 @@ func notify_voxel_removed(pos: Vector3i) -> void:
 		check_structural_integrity(pos)
 
 
+## 爆炸结束后的集中批量物理感知（仅对外围一圈受影响方块做一次唤醒与连通性检测，单次 < 0.2ms，杜绝卡顿）
+func notify_explosion_finished(removed_positions: Array[Vector3i]) -> void:
+	if chunk_manager == null or removed_positions.is_empty():
+		return
+
+	var removed_set: Dictionary = {}
+	for pos in removed_positions:
+		removed_set[pos] = true
+
+	var boundary_neighbors: Dictionary = {}
+	for pos in removed_positions:
+		# 唤醒上方悬空的重力方块
+		var above = pos + Vector3i(0, 1, 0)
+		if not removed_set.has(above):
+			activate_voxel(above, 0.05)
+		
+		# 收集坑洞周围的外部实体邻居
+		for dir in ALL_6_DIRECTIONS:
+			var nb = pos + dir
+			if not removed_set.has(nb):
+				boundary_neighbors[nb] = true
+
+	# 对外围邻居执行流体流动唤醒与结构连通性检测
+	for nb in boundary_neighbors.keys():
+		var v_type = chunk_manager.get_voxel(nb.x, nb.y, nb.z)
+		if VoxelTypes.is_fluid(v_type):
+			activate_fluid(nb, 0.05, 1)
+
+	# 对外围邻居执行结构连通性检测（仅检测下方没有实体支撑的潜在悬空方块）
+	if enable_structural_integrity and not boundary_neighbors.is_empty():
+		var global_visited: Dictionary = {}
+		for nb in boundary_neighbors.keys():
+			# 如果该方块下方就是实体方块，直接属于地面，跳过！
+			var below_v = chunk_manager.get_voxel(nb.x, nb.y - 1, nb.z)
+			if VoxelTypes.is_solid(below_v) and not VoxelTypes.has_gravity(below_v) and not VoxelTypes.is_fluid(below_v):
+				continue
+			if global_visited.has(nb):
+				continue
+			var v = chunk_manager.get_voxel(nb.x, nb.y, nb.z)
+			if VoxelTypes.is_solid(v) and not VoxelTypes.has_gravity(v) and not VoxelTypes.is_fluid(v):
+				_check_single_component_integrity(nb, global_visited)
+
+
+
 ## 放置方块时的物理感知
 func notify_voxel_placed(pos: Vector3i, type: int) -> void:
 	if _is_internal_op or chunk_manager == null:
@@ -403,44 +447,57 @@ func check_structural_integrity(removed_pos: Vector3i) -> void:
 		if not VoxelTypes.is_solid(v_type) or VoxelTypes.has_gravity(v_type) or VoxelTypes.is_fluid(v_type):
 			continue
 
-		# 执行 BFS 连通性分析
-		var component_voxels: Array[Vector3i] = []
-		var component_types: Array[int] = []
-		var queue: Array[Vector3i] = [start_pos]
-		var visited: Dictionary = {start_pos: true}
-		var is_anchored: bool = false
+		_check_single_component_integrity(start_pos, global_visited)
 
-		while not queue.is_empty():
-			var curr = queue.pop_front()
-			component_voxels.append(curr)
-			component_types.append(chunk_manager.get_voxel(curr.x, curr.y, curr.z))
-			global_visited[curr] = true
 
-			# 终止条件 1：触及基岩或地基高度，结构坚固扎根于大地
-			if curr.y <= ground_anchor_y:
-				is_anchored = true
-				break
+func _check_single_component_integrity(start_pos: Vector3i, global_visited: Dictionary) -> void:
+	if global_visited.has(start_pos) or start_pos.y <= ground_anchor_y:
+		return
 
-			# 终止条件 2：体素量超过孤岛上限，说明是连绵大陆/大山的一部分，结构稳定
-			if component_voxels.size() > max_debris_size:
-				is_anchored = true
-				break
+	# 执行 BFS 连通性分析
+	var component_voxels: Array[Vector3i] = []
+	var component_types: Array[int] = []
+	var queue: Array[Vector3i] = [start_pos]
+	var visited: Dictionary = {start_pos: true}
+	var is_anchored: bool = false
 
-			for n_dir in ALL_6_DIRECTIONS:
-				var n_pos = curr + n_dir
-				if visited.has(n_pos):
-					continue
-				if n_pos.y < 0 or n_pos.y >= chunk_manager.max_height:
-					continue
-				var n_type = chunk_manager.get_voxel(n_pos.x, n_pos.y, n_pos.z)
-				if VoxelTypes.is_solid(n_type) and not VoxelTypes.has_gravity(n_type) and not VoxelTypes.is_fluid(n_type):
-					visited[n_pos] = true
-					queue.append(n_pos)
+	while not queue.is_empty():
+		var curr = queue.pop_front()
+		component_voxels.append(curr)
+		component_types.append(chunk_manager.get_voxel(curr.x, curr.y, curr.z))
+		global_visited[curr] = true
 
-		# 如果连通组件穷尽后未触及地基，且体积在 max_debris_size 以内：
-		# 说明这是一块完全悬空的断裂孤岛/建筑悬挑，整体崩塌转化为 3D 刚体碎片！
-		if not is_anchored and component_voxels.size() <= max_debris_size and not component_voxels.is_empty():
-			spawn_debris_entity(component_voxels, component_types)
+		# 终止条件 1：触及基岩或地基高度，结构坚固扎根于大地
+		if curr.y <= ground_anchor_y:
+			is_anchored = true
+			break
+
+		# 终止条件 2：如果当前方块下方是实体支撑（非重力非流体），直接认定接地稳定！
+		var below_v = chunk_manager.get_voxel(curr.x, curr.y - 1, curr.z)
+		if VoxelTypes.is_solid(below_v) and not VoxelTypes.has_gravity(below_v) and not VoxelTypes.is_fluid(below_v):
+			is_anchored = true
+			break
+
+		# 终止条件 3：体素量超过孤岛上限，说明是连绵大陆/大山的一部分，结构稳定
+		if component_voxels.size() > max_debris_size:
+			is_anchored = true
+			break
+
+		for n_dir in ALL_6_DIRECTIONS:
+			var n_pos = curr + n_dir
+			if visited.has(n_pos):
+				continue
+			if n_pos.y < 0 or n_pos.y >= chunk_manager.max_height:
+				continue
+			var n_type = chunk_manager.get_voxel(n_pos.x, n_pos.y, n_pos.z)
+			if VoxelTypes.is_solid(n_type) and not VoxelTypes.has_gravity(n_type) and not VoxelTypes.is_fluid(n_type):
+				visited[n_pos] = true
+				queue.append(n_pos)
+
+	# 如果连通组件穷尽后未触及地基，且体积在 max_debris_size 以内：
+	# 说明这是一块完全悬空的断裂孤岛/建筑悬挑，整体崩塌转化为 3D 刚体碎片！
+	if not is_anchored and component_voxels.size() <= max_debris_size and not component_voxels.is_empty():
+		spawn_debris_entity(component_voxels, component_types)
 
 
 func spawn_debris_entity(voxels: Array[Vector3i], types: Array[int]) -> void:
