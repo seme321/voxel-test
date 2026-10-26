@@ -199,11 +199,18 @@ func _process_falling_sand(delta: float, current_steps: int) -> int:
 		var below_pos = pos + Vector3i(0, -1, 0)
 		var below_voxel = chunk_manager.get_voxel(below_pos.x, below_pos.y, below_pos.z)
 
-		# 垂直落体或沉入流体（密度置换：沙子比水重，沙子沉底，水浮上）
+		# 垂直落体：转化为具有平滑连续重力加速度的物理落体实体 (FallingBlockEntity)
 		if below_voxel == VoxelTypes.Type.AIR:
-			move_voxel(pos, below_pos, v_type)
-			next_active[below_pos] = {"type": v_type, "timer": vertical_fall_delay}
-			activate_voxel(pos + Vector3i(0, 1, 0), vertical_fall_delay * 0.8)
+			_is_internal_op = true
+			chunk_manager.remove_voxel(pos)
+			_is_internal_op = false
+			
+			var falling_block = FallingBlockEntity.new()
+			var scene_root = chunk_manager.get_parent() if chunk_manager.get_parent() != null else chunk_manager
+			scene_root.add_child(falling_block)
+			falling_block.setup(v_type, Vector3(pos), Vector3(0, -1.8, 0), chunk_manager)
+			
+			activate_voxel(pos + Vector3i(0, 1, 0), 0.04)
 			steps += 1
 			continue
 		elif VoxelTypes.is_fluid(below_voxel):
@@ -231,10 +238,20 @@ func _process_falling_sand(delta: float, current_steps: int) -> int:
 				if VoxelTypes.is_fluid(diag_v):
 					move_voxel_swap(pos, diag_pos, v_type, diag_v)
 					activate_fluid(pos, initial_wake_delay, 3)
+					next_active[diag_pos] = {"type": v_type, "timer": slope_slide_delay}
+					activate_voxel(pos + Vector3i(0, 1, 0), slope_slide_delay * 0.8)
 				else:
-					move_voxel(pos, diag_pos, v_type)
-				next_active[diag_pos] = {"type": v_type, "timer": slope_slide_delay}
-				activate_voxel(pos + Vector3i(0, 1, 0), slope_slide_delay * 0.8)
+					_is_internal_op = true
+					chunk_manager.remove_voxel(pos)
+					_is_internal_op = false
+					
+					var falling_block = FallingBlockEntity.new()
+					var scene_root = chunk_manager.get_parent() if chunk_manager.get_parent() != null else chunk_manager
+					scene_root.add_child(falling_block)
+					var slide_vel = Vector3(float(dir.x) * 2.8, -1.0, float(dir.z) * 2.8)
+					falling_block.setup(v_type, Vector3(pos), slide_vel, chunk_manager)
+					
+					activate_voxel(pos + Vector3i(0, 1, 0), 0.04)
 				slid = true
 				steps += 1
 				break
@@ -442,11 +459,23 @@ func spawn_debris_entity(voxels: Array[Vector3i], types: Array[int]) -> void:
 		chunk_manager.remove_voxel(p)
 	_is_internal_op = false
 
-	# 3. 实例化 Godot 3D 原生刚体碎片
-	var debris = VoxelDebrisEntity.new()
-	debris.name = "VoxelDebris_%d" % Time.get_ticks_msec()
-	chunk_manager.add_child(debris)
-	debris.setup(voxels, types, center_of_mass)
+	# 3. 实例化 Caelix 风格 6-DOF 动体体素实体 (VoxelEntity)
+	var entity = VoxelEntity.new()
+	entity.name = "VoxelEntity_%d" % Time.get_ticks_msec()
+	var scene_root = chunk_manager.get_parent() if chunk_manager.get_parent() != null else chunk_manager
+	scene_root.add_child(entity)
+
+	var init_vel = Vector3(
+		randf_range(-0.4, 0.4),
+		randf_range(-0.1, 0.1),
+		randf_range(-0.4, 0.4)
+	)
+	var init_ang_vel = Vector3(
+		randf_range(-1.2, 1.2),
+		randf_range(-1.2, 1.2),
+		randf_range(-1.2, 1.2)
+	)
+	entity.setup(voxels, types, center_of_mass, init_vel, init_ang_vel, chunk_manager)
 
 
 # -----------------------------------------------------------------------------
