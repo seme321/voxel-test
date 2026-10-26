@@ -91,7 +91,8 @@ func _build_visuals() -> void:
 			mat = mat_cache[v_type]
 		else:
 			mat = StandardMaterial3D.new()
-			mat.shading_mode = StandardMaterial3D.SHADING_MODE_UNSHADED
+			mat.shading_mode = StandardMaterial3D.SHADING_MODE_PER_PIXEL
+			mat.roughness = 0.85
 			var v_col: Color = palette.get(v_type, Color(0.55, 0.55, 0.55, 1.0))
 			# 确保哪怕是 AIR 或异常值也有可见实体颜色
 			if v_col.a <= 0.01:

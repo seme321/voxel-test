@@ -1,105 +1,98 @@
-class_name VoxelDebrisEntity extends RigidBody3D
+class_name VoxelDebrisEntity extends Node3D
 
-## Caelix 风格离散浮空建筑/刚体碎片 (VoxelDebrisEntity)
-## 当悬崖、立柱或建筑被挖断而失去地面物理支撑时，整块离散结构转换为由原生 3D 刚体驱动的掉落碎片
+## Caelix 风格体素物理飞溅碎屑 (Voxel Debris / Blast Rubble)
+## 爆炸碎裂的方块化为具有真实质量、阻尼与碰撞弹跳的高性能体素碎屑。
+## 落地弹跳翻滚，自然衰减淡出消失，绝不原地固化产生畸形方块堆。
 
-@export var max_lifetime: float = 12.0 # 最长存活时间（秒）
-var lifetime: float = 12.0
-var is_fading: bool = false
-var fade_timer: float = 0.5
+@export var gravity: float = 18.0
+var velocity: Vector3 = Vector3.ZERO
+var angular_velocity: Vector3 = Vector3.ZERO
+var chunk_manager: ChunkManager = null
+var mesh_instance: MeshInstance3D = null
 
-var multimesh_instance: MultiMeshInstance3D = null
+var lifetime: float = 2.0
+var max_lifetime: float = 2.0
+var base_scale: float = 0.30
+var bounce_count: int = 0
 
 
-func setup(voxels: Array[Vector3i], types: Array[int], center_of_mass: Vector3) -> void:
-	position = center_of_mass
-	lifetime = max_lifetime
-	
-	# 物理属性配置
-	mass = clampf(float(voxels.size()) * 5.0, 1.0, 200.0)
-	linear_damp = 0.1
-	angular_damp = 0.2
-	collision_layer = 1
-	collision_mask = 1
-	continuous_cd = true
-	
-	# 1. 构建物理碰撞体 (Collision Shape)
-	if voxels.size() <= 16:
-		# 精确复合体碰撞盒（小构件具备完美的边角翻滚触地碰撞）
-		for p in voxels:
-			var col = CollisionShape3D.new()
-			var box = BoxShape3D.new()
-			box.size = Vector3(0.98, 0.98, 0.98)
-			col.shape = box
-			col.position = Vector3(p.x + 0.5, p.y + 0.5, p.z + 0.5) - center_of_mass
-			add_child(col)
+func setup(v_type: int, start_pos: Vector3, init_vel: Vector3, cm: ChunkManager = null) -> void:
+	chunk_manager = cm
+	if is_inside_tree():
+		global_position = start_pos
 	else:
-		# 大中型碎片使用包围盒快速碰撞，杜绝物理计算死锁
-		var min_p = Vector3(voxels[0])
-		var max_p = Vector3(voxels[0])
-		for p in voxels:
-			min_p = min_p.min(Vector3(p))
-			max_p = max_p.max(Vector3(p))
-		var aabb_size = (max_p - min_p) + Vector3.ONE
-		var aabb_center = min_p + aabb_size * 0.5
-		var col = CollisionShape3D.new()
-		var box = BoxShape3D.new()
-		box.size = aabb_size * 0.98
-		col.shape = box
-		col.position = aabb_center - center_of_mass
-		add_child(col)
-
-	# 2. 构建高性能硬件实例化渲染视觉表现 (MultiMeshInstance3D)
-	multimesh_instance = MultiMeshInstance3D.new()
-	var mm = MultiMesh.new()
-	mm.transform_format = MultiMesh.TRANSFORM_3D
-	mm.use_colors = true
-	mm.instance_count = voxels.size()
-	
-	var box_mesh = BoxMesh.new()
-	box_mesh.size = Vector3(1.0, 1.0, 1.0)
-	
-	var mat = StandardMaterial3D.new()
-	mat.vertex_color_use_as_albedo = true
-	mat.roughness = 0.75
-	box_mesh.material = mat
-	mm.mesh = box_mesh
-	
-	var palette = VoxelTypes.get_palette()
-	for i in range(voxels.size()):
-		var local_offset = Vector3(voxels[i].x + 0.5, voxels[i].y + 0.5, voxels[i].z + 0.5) - center_of_mass
-		mm.set_instance_transform(i, Transform3D(Basis(), local_offset))
-		var v_col: Color = palette.get(types[i], Color(0.6, 0.6, 0.6, 1.0))
-		mm.set_instance_color(i, v_col)
-		
-	multimesh_instance.multimesh = mm
-	add_child(multimesh_instance)
-	
-	# 3. 初始翻滚角冲量与微弱横向分离力
-	linear_velocity = Vector3(
-		randf_range(-0.4, 0.4),
-		randf_range(-0.2, 0.1),
-		randf_range(-0.4, 0.4)
-	)
+		position = start_pos
+	velocity = init_vel
 	angular_velocity = Vector3(
-		randf_range(-2.0, 2.0),
-		randf_range(-2.0, 2.0),
-		randf_range(-2.0, 2.0)
+		randf_range(-8.0, 8.0),
+		randf_range(-8.0, 8.0),
+		randf_range(-8.0, 8.0)
 	)
+	top_level = true
+	base_scale = randf_range(0.24, 0.36)
+
+	mesh_instance = MeshInstance3D.new()
+	var box = BoxMesh.new()
+	box.size = Vector3(base_scale, base_scale, base_scale)
+	mesh_instance.mesh = box
+
+	var mat = StandardMaterial3D.new()
+	mat.shading_mode = StandardMaterial3D.SHADING_MODE_PER_PIXEL
+	mat.roughness = 0.85
+
+	var palette = VoxelTypes.get_palette()
+	var col: Color = palette.get(v_type, Color(0.55, 0.40, 0.25, 1.0))
+	if col.a <= 0.05:
+		col = Color(0.55, 0.40, 0.25, 1.0)
+	mat.albedo_color = col
+	mesh_instance.material_override = mat
+	add_child(mesh_instance)
 
 
 func _physics_process(delta: float) -> void:
-	if is_fading:
-		fade_timer -= delta
-		var scale_factor = clampf(fade_timer / 0.5, 0.01, 1.0)
-		scale = Vector3.ONE * scale_factor
-		if fade_timer <= 0.0:
-			queue_free()
-		return
-		
 	lifetime -= delta
-	
-	# 静止落地或超时判定，启动平滑缩放淡出回收
-	if lifetime <= 0.0 or (lifetime < (max_lifetime - 2.0) and sleeping):
-		is_fading = true
-		fade_timer = 0.5
+	if lifetime <= 0.0 or global_position.y <= -20.0:
+		queue_free()
+		return
+
+	# 末期平滑缩小淡出
+	if lifetime < 0.5 and mesh_instance != null:
+		var s = (lifetime / 0.5)
+		mesh_instance.scale = Vector3(s, s, s)
+
+	# 空间翻滚旋转
+	rotate_x(angular_velocity.x * delta)
+	rotate_y(angular_velocity.y * delta)
+	rotate_z(angular_velocity.z * delta)
+
+	# 重力积分
+	velocity.y -= gravity * delta
+
+	# 连续体素碰撞检测与弹跳
+	_step_physics(delta)
+
+
+func _step_physics(delta: float) -> void:
+	var cur = global_position
+	var next_pos = cur + velocity * delta
+
+	if chunk_manager != null:
+		var check_x = floori(next_pos.x)
+		var check_y = floori(next_pos.y)
+		var check_z = floori(next_pos.z)
+
+		if chunk_manager.is_voxel_solid(check_x, check_y, check_z):
+			# 发生地面或坑壁碰撞
+			bounce_count += 1
+			velocity.y = -velocity.y * 0.32
+			velocity.x *= 0.55
+			velocity.z *= 0.55
+			angular_velocity *= 0.65
+
+			# 速度微弱时停靠地面
+			if absf(velocity.y) < 0.5:
+				velocity = Vector3.ZERO
+				angular_velocity = Vector3.ZERO
+			return
+
+	global_position = next_pos

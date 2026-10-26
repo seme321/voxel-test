@@ -71,19 +71,24 @@ inline float3 GetVoxelColor(uint matID) {
 
 // Atmospheric Procedural Sky Model
 inline float3 GetSkyColor(float3 dir, float3 sunDir, float3 sunColor) {
-    float sunDot = dot(dir, sunDir);
+    float sunLen = length(sunDir);
+    float3 safeSunDir = (sunLen > 0.001) ? (sunDir / sunLen) : normalize(float3(0.55, 0.75, 0.35));
+    float sunColorLen = length(sunColor);
+    float3 safeSunColor = (sunColorLen > 0.001) ? sunColor : float3(1.0, 0.95, 0.85);
+
+    float sunDot = clamp(dot(dir, safeSunDir), -1.0, 1.0);
     float height = clamp(dir.y, -1.0, 1.0);
-    float sunHeight = clamp(sunDir.y, -1.0, 1.0);
+    float sunHeight = clamp(safeSunDir.y, -1.0, 1.0);
     
     // Sunset / sunrise horizon warm golden-orange transition
     float sunsetFactor = clamp(1.0 - abs(sunHeight), 0.0, 1.0);
-    float3 horizonColor = lerp(float3(0.70, 0.78, 0.88), float3(0.96, 0.52, 0.22), sunsetFactor * 0.85);
-    float3 zenithColor = lerp(float3(0.18, 0.42, 0.85), float3(0.08, 0.18, 0.45), sunsetFactor * 0.6);
+    float3 horizonColor = lerp(float3(0.72, 0.80, 0.90), float3(0.96, 0.55, 0.22), sunsetFactor * 0.85);
+    float3 zenithColor = lerp(float3(0.20, 0.48, 0.88), float3(0.08, 0.18, 0.45), sunsetFactor * 0.6);
     
     float t = clamp(height * 0.5 + 0.5, 0.0, 1.0);
-    float3 baseSky = lerp(horizonColor * 0.7, zenithColor, pow(t, 0.75));
+    float3 baseSky = lerp(horizonColor * 0.75, zenithColor, pow(t, 0.75));
     if (dir.y < 0.0) {
-        baseSky = lerp(horizonColor * 0.7, float3(0.15, 0.14, 0.13), clamp(-dir.y * 3.0, 0.0, 1.0));
+        baseSky = lerp(horizonColor * 0.75, float3(0.18, 0.17, 0.16), clamp(-dir.y * 3.0, 0.0, 1.0));
     }
     
     // Sun disc & atmospheric halo
@@ -91,7 +96,7 @@ inline float3 GetSkyColor(float3 dir, float3 sunDir, float3 sunColor) {
     float disc = pow(sunDisc, 512.0) * 4.0;
     float corona = pow(max(0.0, sunDot), 32.0) * 0.45;
     
-    return baseSky + sunColor * (disc + corona);
+    return baseSky + safeSunColor * (disc + corona);
 }
 
 // Pseudo-random 2D hash for jittering

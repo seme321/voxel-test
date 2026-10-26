@@ -35,10 +35,12 @@ void RayGenMain()
         float3 albedo = payload.color.rgb;
 
         // Unpack Lighting & Visual parameters
-        float3 sunDir = normalize(g_Camera.sunDir.xyz);
-        float3 sunColor = g_Camera.sunColor.rgb;
-        float sunIntensity = g_Camera.sunDir.w;
-        float ambientIntensity = g_Camera.sunColor.w;
+        float3 rawSunDir = g_Camera.sunDir.xyz;
+        float3 sunDir = (length(rawSunDir) > 0.001) ? normalize(rawSunDir) : normalize(float3(0.55, 0.75, 0.35));
+        float3 rawSunColor = g_Camera.sunColor.rgb;
+        float3 sunColor = (length(rawSunColor) > 0.001) ? rawSunColor : float3(1.0, 0.95, 0.85);
+        float sunIntensity = (g_Camera.sunDir.w > 0.0001) ? g_Camera.sunDir.w : 1.0;
+        float ambientIntensity = (g_Camera.sunColor.w > 0.0001) ? g_Camera.sunColor.w : 0.28;
 
         float rtaoStrength = g_Camera.visualSettings.x;
         float rtaoRadius = g_Camera.visualSettings.y;
@@ -234,6 +236,12 @@ void RayGenMain()
         float3 horizonRayDir = normalize(float3(ray.Direction.x, max(ray.Direction.y * 0.2, 0.0), ray.Direction.z));
         float3 skyFogColor = GetSkyColor(horizonRayDir, sunDir, sunColor);
         payload.color = float4(lerp(litColor, skyFogColor, clamp(fog, 0.0, 1.0)), 1.0);
+    } else {
+        // Caelix Architecture: Primary Ray missed all geometry -> directly evaluate sky model!
+        float3 sunDir = g_Camera.sunDir.xyz;
+        float3 sunColor = g_Camera.sunColor.rgb;
+        float3 sky = GetSkyColor(ray.Direction, sunDir, sunColor);
+        payload.color = float4(sky, 1.0);
     }
 
     g_OutputTarget[launchIndex] = payload.color;

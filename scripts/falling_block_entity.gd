@@ -39,7 +39,8 @@ func setup(type: int, start_world_pos: Vector3, init_vel: Vector3 = Vector3.ZERO
 	mesh_instance.mesh = box
 
 	var mat = StandardMaterial3D.new()
-	mat.shading_mode = StandardMaterial3D.SHADING_MODE_UNSHADED
+	mat.shading_mode = StandardMaterial3D.SHADING_MODE_PER_PIXEL
+	mat.roughness = 0.85
 	var palette = VoxelTypes.get_palette()
 	var v_col: Color = palette.get(voxel_type, Color(0.85, 0.75, 0.45, 1.0))
 	if v_col.a <= 0.05:

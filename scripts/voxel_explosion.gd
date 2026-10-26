@@ -56,27 +56,27 @@ static func trigger_explosion(epicenter: Vector3, radius: float, blast_power: fl
 					var v_pos = Vector3i(x, y, z)
 					blocks_to_remove.append(v_pos)
 
-					# 边缘剥离方块作为动力学落体弹射（上限 6 块，兼顾震撼表现与绝对流畅度）
-					if dist >= radius * 0.45 and blocks_to_launch.size() < 6:
+					# 炸裂体素碎屑物理弹射（Caelix Debris Rubble，上限 16 块，形成极具打击感的碎石飞溅）
+					if dist >= radius * 0.35 and blocks_to_launch.size() < 16:
 						var dir = (cell_center - epicenter).normalized()
 						if dir.is_zero_approx():
-							dir = Vector3.UP
-						var launch_speed = blast_power * falloff * 0.8
-						var launch_vel = dir * launch_speed + Vector3(0, 3.2 * falloff, 0)
+							dir = Vector3(randf_range(-0.5, 0.5), 1.0, randf_range(-0.5, 0.5)).normalized()
+						var launch_speed = blast_power * falloff * randf_range(0.6, 1.1)
+						var launch_vel = dir * launch_speed + Vector3(randf_range(-1.0, 1.0), randf_range(3.0, 5.5) * falloff, randf_range(-1.0, 1.0))
 						blocks_to_launch.append({
 							"type": v_type,
-							"pos": Vector3(v_pos),
+							"pos": cell_center,
 							"vel": launch_vel
 						})
 
 	# 3. 批量原子化从大地图移除（调用 ChunkManager 批处理，彻底消除逐格 BFS 卡顿）
 	chunk_manager.remove_voxels_batch(blocks_to_remove)
 
-	# 4. 生成少量飞溅动力学落体
+	# 4. 生成 Caelix 风格物理碎屑（真实弹跳、自然衰减淡出，杜绝原地长出怪异方块柱）
 	for item in blocks_to_launch:
-		var f_block = FallingBlockEntity.new()
-		scene_root.add_child(f_block)
-		f_block.setup(item["type"], item["pos"], item["vel"], chunk_manager)
+		var debris = VoxelDebrisEntity.new()
+		scene_root.add_child(debris)
+		debris.setup(item["type"], item["pos"], item["vel"], chunk_manager)
 
 	# 5. 对周围物理刚体（VoxelEntity 等）施加真实径向冲量
 	var world_3d: World3D = null
